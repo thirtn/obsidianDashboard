@@ -1,5 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { DashboardSettings, DEFAULT_SETTINGS } from "./types";
+import { DashboardSettings, DEFAULT_SETTINGS, ReportType } from "./types";
 import { DashboardView, DASHBOARD_VIEW_TYPE } from "./ui/DashboardView";
 
 export default class LLMWikiDashboardPlugin extends Plugin {
@@ -44,7 +44,17 @@ export default class LLMWikiDashboardPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    // Deep-merge reportConfigs so new fields get defaults
+    if (saved?.reportConfigs) {
+      this.settings.reportConfigs = Object.assign({}, DEFAULT_SETTINGS.reportConfigs);
+      for (const key of Object.keys(this.settings.reportConfigs)) {
+        if ((saved.reportConfigs as any)[key]) {
+          Object.assign((this.settings.reportConfigs as any)[key], (saved.reportConfigs as any)[key]);
+        }
+      }
+    }
   }
 
   async saveSettings(settings?: DashboardSettings) {
@@ -180,5 +190,81 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    // ─── Report Configs ──────────────────────────────────────────────────────
+
+    containerEl.createEl("h3", { text: "报表配置" });
+
+    const reportLabels: Record<ReportType, string> = {
+      daily: "日报",
+      weekly: "周报",
+      monthly: "月报",
+      quarterly: "季报",
+      yearly: "年报",
+    };
+
+    for (const type of Object.keys(reportLabels) as ReportType[]) {
+      const cfg = this.plugin.settings.reportConfigs[type];
+      containerEl.createEl("h4", { text: reportLabels[type] });
+
+      new Setting(containerEl)
+        .setName("启用")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(cfg.enabled)
+            .onChange(async (value) => {
+              cfg.enabled = value;
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("新建时弹窗确认")
+        .setDesc("点击没有对应报告的日期时，是否先弹窗确认再新建")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(cfg.confirmBeforeCreate)
+            .onChange(async (value) => {
+              cfg.confirmBeforeCreate = value;
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("存放目录")
+        .setDesc("文件存储的根目录")
+        .addText((text) =>
+          text
+            .setValue(cfg.directory)
+            .onChange(async (value) => {
+              cfg.directory = value.trim();
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("文件路径格式")
+        .setDesc(`支持 YYYY/YY/MM/M/DD/D 等 moment.js 格式令牌。如 YYYY/MM/YYYY-MM-DD`)
+        .addText((text) =>
+          text
+            .setValue(cfg.filenameFormat)
+            .onChange(async (value) => {
+              cfg.filenameFormat = value.trim();
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("模板路径")
+        .setDesc("vault 中的模板文件路径（不含 .md 后缀），留空则不使用模板")
+        .addText((text) =>
+          text
+            .setValue(cfg.templatePath)
+            .onChange(async (value) => {
+              cfg.templatePath = value.trim();
+              await this.plugin.saveSettings();
+            })
+        );
+    }
   }
 }

@@ -22,9 +22,16 @@ __export(main_exports, {
   default: () => LLMWikiDashboardPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/types.ts
+var defaultReportConfigs = {
+  daily: { enabled: true, confirmBeforeCreate: true, directory: "raw/dayReport", filenameFormat: "YYYY/MM/YYYY-MM-DD", templatePath: "raw/dayReport/template" },
+  weekly: { enabled: false, confirmBeforeCreate: true, directory: "raw/weekReport", filenameFormat: "YYYY/MM/YYYY-[W]ww", templatePath: "raw/weekReport/template" },
+  monthly: { enabled: false, confirmBeforeCreate: true, directory: "raw/monthReport", filenameFormat: "YYYY/MM/YYYY-MM", templatePath: "raw/monthReport/template" },
+  quarterly: { enabled: false, confirmBeforeCreate: true, directory: "raw/quarterReport", filenameFormat: "YYYY/MM/YYYY-[Q]Q", templatePath: "raw/quarterReport/template" },
+  yearly: { enabled: false, confirmBeforeCreate: true, directory: "raw/yearReport", filenameFormat: "YYYY/YYYY", templatePath: "raw/yearReport/template" }
+};
 var DEFAULT_SETTINGS = {
   apiBaseUrl: "https://api.openai.com/v1",
   apiKey: "",
@@ -35,11 +42,12 @@ var DEFAULT_SETTINGS = {
   tokenBalanceApiUrl: "",
   trackedFolders: ["raw", "wiki", "outputs", "concepts", "entities"],
   lastConnectionStatus: "untested",
-  lastConnectionTime: ""
+  lastConnectionTime: "",
+  reportConfigs: defaultReportConfigs
 };
 
 // src/ui/DashboardView.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/services/FileService.ts
 var import_obsidian = require("obsidian");
@@ -141,7 +149,9 @@ var FileService = class {
     var _a, _b, _c, _d, _e, _f;
     let leaves = this.app.workspace.getLeavesOfType("file-explorer");
     if (leaves.length === 0) {
-      await this.app.workspace.getLeftLeaf(false).setViewState({ type: "file-explorer" });
+      const leaf = this.app.workspace.getLeftLeaf(false);
+      if (leaf)
+        await leaf.setViewState({ type: "file-explorer" });
       leaves = this.app.workspace.getLeavesOfType("file-explorer");
     }
     if (leaves.length === 0)
@@ -431,7 +441,8 @@ var LLMService = class {
     }
   }
   todayStr() {
-    return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const d = /* @__PURE__ */ new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 };
 
@@ -542,7 +553,8 @@ var HeatmapService = class {
     }
   }
   todayStr() {
-    return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const d = /* @__PURE__ */ new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 };
 
@@ -745,12 +757,192 @@ var FolderConfigModal = class extends import_obsidian5.Modal {
   }
 };
 
+// src/modals/ReportConfigModal.ts
+var import_obsidian6 = require("obsidian");
+var REPORT_LABELS = {
+  daily: "\u65E5\u62A5",
+  weekly: "\u5468\u62A5",
+  monthly: "\u6708\u62A5",
+  quarterly: "\u5B63\u62A5",
+  yearly: "\u5E74\u62A5"
+};
+var TOKEN_HELP = "\u683C\u5F0F\u4EE4\u724C: YYYY(\u5E74) YY(\u5E74\u540E\u4E24\u4F4D) MM(\u6708\u8865\u96F6) M(\u6708) DD(\u65E5\u8865\u96F6) D(\u65E5) ww(\u5468\u8865\u96F6) w(\u5468) Q(\u5B63\u5EA6) [\u6587\u5B57](\u539F\u6587\u8F93\u51FA)";
+var EXAMPLE = {
+  daily: "YYYY/MM/YYYY-MM-DD",
+  weekly: "YYYY/MM/YYYY-[W]ww",
+  monthly: "YYYY/MM/YYYY-MM",
+  quarterly: "YYYY/MM/YYYY-[Q]Q",
+  yearly: "YYYY/YYYY"
+};
+var ReportConfigModal = class extends import_obsidian6.Modal {
+  constructor(app, configs, onSave) {
+    super(app);
+    this.onSave = onSave;
+    this.mdFiles = [];
+    this.folders = [];
+    this.configs = JSON.parse(JSON.stringify(configs));
+    const files = this.app.vault.getMarkdownFiles();
+    this.mdFiles = files.map((f) => ({ path: f.path.replace(/\.md$/, ""), name: f.path })).sort((a, b) => a.name.localeCompare(b.name));
+    const dirSet = /* @__PURE__ */ new Set();
+    dirSet.add("");
+    for (const f of this.app.vault.getAllLoadedFiles()) {
+      if (f instanceof import_obsidian6.TFolder)
+        dirSet.add(f.path);
+    }
+    this.folders = [...dirSet].sort();
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("dashboard-modal");
+    contentEl.createEl("h2", { text: "\u62A5\u8868\u914D\u7F6E" });
+    const activeTab = {};
+    let currentType = "daily";
+    const tabBar = contentEl.createDiv("dashboard-report-tabs");
+    const panel = contentEl.createDiv("dashboard-report-panel");
+    const showTab = (type) => {
+      currentType = type;
+      for (const [t, el] of Object.entries(activeTab)) {
+        el.classList.toggle("active", t === type);
+      }
+      this.renderTabContent(panel, type);
+    };
+    for (const type of Object.keys(REPORT_LABELS)) {
+      const tab = tabBar.createEl("button", {
+        text: REPORT_LABELS[type],
+        cls: "dashboard-report-tab"
+      });
+      tab.addEventListener("click", () => showTab(type));
+      activeTab[type] = tab;
+    }
+    showTab("daily");
+    contentEl.createDiv({ text: TOKEN_HELP, cls: "dashboard-field-hint" });
+    const actions = contentEl.createDiv("dashboard-modal-actions");
+    const saveBtn = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
+    saveBtn.addEventListener("click", () => {
+      this.onSave(this.configs);
+      this.close();
+      new import_obsidian6.Notice("\u62A5\u8868\u914D\u7F6E\u5DF2\u4FDD\u5B58");
+    });
+  }
+  renderTabContent(panel, type) {
+    panel.empty();
+    const cfg = this.configs[type];
+    this.createToggle(panel, "\u542F\u7528", cfg.enabled, (v) => cfg.enabled = v);
+    this.createToggle(panel, "\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4", cfg.confirmBeforeCreate, (v) => cfg.confirmBeforeCreate = v);
+    this.createDirectorySelect(panel, cfg);
+    this.createFormatField(panel, cfg, type);
+    this.createTemplateSelect(panel, cfg);
+  }
+  createToggle(parent, label, value, onChange) {
+    const row = parent.createDiv("dashboard-field");
+    row.createEl("label", { text: label });
+    const toggle = row.createEl("label", { cls: "dashboard-toggle" });
+    const cb = toggle.createEl("input");
+    cb.type = "checkbox";
+    cb.checked = value;
+    cb.addEventListener("change", () => onChange(cb.checked));
+    toggle.createEl("span", { cls: "dashboard-toggle-slider" });
+  }
+  createDirectorySelect(parent, cfg) {
+    const row = parent.createDiv("dashboard-field");
+    row.createEl("label", { text: "\u5B58\u653E\u76EE\u5F55" });
+    const wrap = row.createDiv("dashboard-select-wrap");
+    const select = wrap.createEl("select");
+    for (const f of this.folders) {
+      const label = f || "\uFF08vault \u6839\u76EE\u5F55\uFF09";
+      const opt = select.createEl("option", { value: f, text: label });
+      if (f === cfg.directory)
+        opt.selected = true;
+    }
+    if (cfg.directory && !this.folders.includes(cfg.directory)) {
+      const opt = select.createEl("option", { value: cfg.directory, text: `${cfg.directory}\uFF08\u81EA\u5B9A\u4E49\uFF09` });
+      opt.selected = true;
+    }
+    select.addEventListener("change", () => {
+      cfg.directory = select.value;
+    });
+  }
+  createFormatField(parent, cfg, type) {
+    const row = parent.createDiv("dashboard-field");
+    row.createEl("label", { text: "\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F" });
+    const input = row.createEl("input");
+    input.type = "text";
+    input.placeholder = EXAMPLE[type];
+    input.value = cfg.filenameFormat;
+    const preview = row.createDiv("dashboard-format-preview");
+    const updatePreview = () => {
+      try {
+        preview.textContent = `\u793A\u4F8B: ${this.formatMomentDate(/* @__PURE__ */ new Date(), input.value || EXAMPLE[type])}`;
+      } catch (e) {
+        preview.textContent = "\u793A\u4F8B: \uFF08\u683C\u5F0F\u65E0\u6548\uFF09";
+      }
+    };
+    updatePreview();
+    input.addEventListener("input", () => {
+      cfg.filenameFormat = input.value.trim();
+      updatePreview();
+    });
+  }
+  formatMomentDate(date, format) {
+    const y = String(date.getFullYear());
+    const m = String(date.getMonth() + 1);
+    const d = String(date.getDate());
+    const temp = new Date(date.getTime());
+    temp.setHours(0, 0, 0, 0);
+    temp.setDate(temp.getDate() + 3 - (temp.getDay() + 6) % 7);
+    const week1 = new Date(temp.getFullYear(), 0, 4);
+    const w = String(1 + Math.round(((temp.getTime() - week1.getTime()) / 864e5 - 3 + (week1.getDay() + 6) % 7) / 7));
+    const Q = String(Math.floor(date.getMonth() / 3) + 1);
+    let result = format.replace(/\[([^\]]+)\]/g, "$1");
+    result = result.replace(/YYYY/g, y).replace(/YY/g, y.slice(2)).replace(/MM/g, m.padStart(2, "0")).replace(/DD/g, d.padStart(2, "0")).replace(/ww/g, w.padStart(2, "0")).replace(/M/g, m).replace(/D/g, d).replace(/w/g, w).replace(/Q/g, Q);
+    return result;
+  }
+  createTemplateSelect(parent, cfg) {
+    const row = parent.createDiv("dashboard-field");
+    row.createEl("label", { text: "\u6A21\u677F\u6587\u4EF6" });
+    const wrap = row.createDiv("dashboard-select-wrap");
+    const select = wrap.createEl("select");
+    const noneOpt = select.createEl("option", { value: "", text: "\uFF08\u4E0D\u4F7F\u7528\u6A21\u677F\uFF09" });
+    if (!cfg.templatePath)
+      noneOpt.selected = true;
+    for (const f of this.mdFiles) {
+      const opt = select.createEl("option", { value: f.path, text: f.path });
+      if (f.path === cfg.templatePath)
+        opt.selected = true;
+    }
+    select.addEventListener("change", () => {
+      cfg.templatePath = select.value;
+    });
+  }
+  createTextField(parent, label, value, onChange, placeholder) {
+    const row = parent.createDiv("dashboard-field");
+    row.createEl("label", { text: label });
+    const input = row.createEl("input");
+    input.type = "text";
+    input.placeholder = placeholder;
+    input.value = value;
+    input.addEventListener("input", () => onChange(input.value));
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+
 // src/ui/DashboardView.ts
 var DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
-var DashboardView = class extends import_obsidian6.ItemView {
+var DashboardView = class extends import_obsidian7.ItemView {
   constructor(leaf, settings, onSettingsChange) {
     super(leaf);
     this.executing = false;
+    this.currentHeatmapYear = (/* @__PURE__ */ new Date()).getFullYear();
+    this.REPORT_NAMES = {
+      daily: "\u65E5\u62A5",
+      weekly: "\u5468\u62A5",
+      monthly: "\u6708\u62A5",
+      quarterly: "\u5B63\u62A5",
+      yearly: "\u5E74\u62A5"
+    };
     this.settings = settings;
     this.onSettingsChange = onSettingsChange;
     this.fileService = new FileService(this.app);
@@ -786,9 +978,9 @@ var DashboardView = class extends import_obsidian6.ItemView {
     await this.renderHeader(container);
     const scroll = container.createDiv("dashboard-scroll");
     await this.renderModule1(scroll);
+    this.renderModule5(scroll);
     await this.renderModule3(scroll);
     this.renderModule4(scroll);
-    this.renderModule5(scroll);
     this.renderModule6(scroll);
     this.renderFooter(scroll);
   }
@@ -819,7 +1011,7 @@ var DashboardView = class extends import_obsidian6.ItemView {
     let thisMonth = 0;
     try {
       const store = this.loadLocalTokenStore();
-      const todayStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+      const todayStr = this.fmtDate(/* @__PURE__ */ new Date());
       const monthPrefix = todayStr.slice(0, 7);
       today = (_a = store[todayStr]) != null ? _a : 0;
       for (const [date, tokens] of Object.entries(store)) {
@@ -831,7 +1023,7 @@ var DashboardView = class extends import_obsidian6.ItemView {
     let balanceInfo = null;
     if (this.settings.tokenBalanceApiUrl && this.settings.apiKey) {
       try {
-        const resp = await (0, import_obsidian6.requestUrl)({
+        const resp = await (0, import_obsidian7.requestUrl)({
           url: this.settings.tokenBalanceApiUrl,
           method: "GET",
           headers: { Authorization: `Bearer ${this.settings.apiKey}` },
@@ -977,11 +1169,11 @@ var DashboardView = class extends import_obsidian6.ItemView {
         return;
       const input = inputArea.value.trim();
       if (!input) {
-        new import_obsidian6.Notice("\u8BF7\u8F93\u5165\u5185\u5BB9");
+        new import_obsidian7.Notice("\u8BF7\u8F93\u5165\u5185\u5BB9");
         return;
       }
       if (!this.settings.apiKey) {
-        new import_obsidian6.Notice("\u8BF7\u5148\u914D\u7F6E API Key");
+        new import_obsidian7.Notice("\u8BF7\u5148\u914D\u7F6E API Key");
         return;
       }
       this.executing = true;
@@ -1005,7 +1197,7 @@ var DashboardView = class extends import_obsidian6.ItemView {
             await this.app.vault.adapter.mkdir("outputs");
             await this.app.vault.create(filename, result);
           }
-          new import_obsidian6.Notice(`\u5DF2\u5BFC\u51FA\u5230 ${filename}`);
+          new import_obsidian7.Notice(`\u5DF2\u5BFC\u51FA\u5230 ${filename}`);
         };
       } catch (e) {
         errorEl.textContent = `\u26A0 ${e.message}`;
@@ -1020,46 +1212,191 @@ var DashboardView = class extends import_obsidian6.ItemView {
   // ─── Module 5: Heatmap ───────────────────────────────────────────────────
   renderModule5(parent) {
     var _a;
-    const mod = this.createModule(parent, "\u{1F5D3}", "\u5DE5\u4F5C\u70ED\u529B\u56FE");
+    const mod = parent.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.createEl("span", { text: "\u{1F5D3} \u5DE5\u4F5C\u70ED\u529B\u56FE", cls: "dashboard-module-title" });
+    const yearNav = header.createDiv("dashboard-heatmap-year-nav");
+    const prevBtn = yearNav.createEl("span", { text: "\u25C0", cls: "dashboard-heatmap-year-arrow" });
+    const yearLabel = yearNav.createEl("span", { text: String(this.currentHeatmapYear), cls: "dashboard-heatmap-year-label clickable" });
+    yearLabel.addEventListener("click", () => {
+      if (this.settings.reportConfigs.yearly.enabled) {
+        this.openOrCreateReport("yearly", new Date(this.currentHeatmapYear, 0, 1));
+      }
+    });
+    const nextBtn = yearNav.createEl("span", { text: "\u25B6", cls: "dashboard-heatmap-year-arrow" });
+    const cfgBtn = yearNav.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "\u65E5\u62A5/\u5468\u62A5\u914D\u7F6E" });
+    cfgBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    cfgBtn.addEventListener("click", () => {
+      new ReportConfigModal(this.app, this.settings.reportConfigs, async (configs) => {
+        this.settings.reportConfigs = configs;
+        await this.onSettingsChange(this.settings);
+      }).open();
+    });
+    const thisYear = (/* @__PURE__ */ new Date()).getFullYear();
+    if (this.currentHeatmapYear >= thisYear)
+      nextBtn.addClass("disabled");
+    prevBtn.addEventListener("click", () => {
+      this.currentHeatmapYear--;
+      this.render();
+    });
+    nextBtn.addEventListener("click", () => {
+      if (this.currentHeatmapYear < thisYear) {
+        this.currentHeatmapYear++;
+        this.render();
+      }
+    });
     const body = mod.createDiv("dashboard-module-body");
     const now = /* @__PURE__ */ new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
-    const data = this.heatmapService.getMonthData(year, month);
+    const todayStr = this.fmtDate(now);
+    const data = this.heatmapService.getData();
     const maxVal = Math.max(...Object.values(data), 1);
-    body.createDiv({ text: `${year}\u5E74${month}\u6708`, cls: "dashboard-heatmap-title" });
-    const calEl = body.createDiv("dashboard-heatmap-cal");
-    const headerRow = calEl.createDiv("dashboard-heatmap-row");
-    for (const d of ["\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D", "\u65E5"]) {
-      headerRow.createDiv({ text: d, cls: "dashboard-heatmap-cell heatmap-header" });
+    const year = this.currentHeatmapYear;
+    const DAYS = ["Mon", "", "Wed", "", "Fri", "", "Sun"];
+    const mainWrap = body.createDiv("dashboard-heatmap-main-wrap");
+    const dayCol = mainWrap.createDiv("dashboard-heatmap-days");
+    dayCol.createDiv({ cls: "dashboard-heatmap-days-spacer" });
+    for (const d of DAYS) {
+      dayCol.createDiv({ text: d, cls: "dashboard-heatmap-day-label" });
     }
-    const firstDay = new Date(year, month - 1, 1).getDay();
-    const adjustedFirst = (firstDay === 0 ? 7 : firstDay) - 1;
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const todayStr = now.toISOString().slice(0, 10);
-    let row = calEl.createDiv("dashboard-heatmap-row");
-    for (let i = 0; i < adjustedFirst; i++) {
-      row.createDiv({ cls: "dashboard-heatmap-cell empty" });
-    }
-    for (let d = 1; d <= daysInMonth; d++) {
-      if ((adjustedFirst + d - 1) % 7 === 0 && d > 1) {
-        row = calEl.createDiv("dashboard-heatmap-row");
+    const monthsWrap = mainWrap.createDiv("dashboard-heatmap-months-wrap");
+    for (let m = 0; m < 12; m++) {
+      const monthBlock = monthsWrap.createDiv("dashboard-heatmap-month-block");
+      const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const monthLabel = monthBlock.createDiv({ text: MONTHS[m], cls: "dashboard-heatmap-month-label clickable" });
+      monthLabel.addEventListener("click", () => {
+        if (this.settings.reportConfigs.monthly.enabled) {
+          this.openOrCreateReport("monthly", new Date(year, m, 1));
+        }
+      });
+      const firstDay = new Date(year, m, 1);
+      const firstDow = firstDay.getDay();
+      const startOffset = firstDow === 0 ? 6 : firstDow - 1;
+      const daysInMonth = new Date(year, m + 1, 0).getDate();
+      const grid = monthBlock.createDiv("dashboard-heatmap-grid");
+      for (let p = 0; p < startOffset; p++) {
+        grid.createDiv({ cls: "dashboard-heatmap-cell future" });
       }
-      const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const val = (_a = data[dateStr]) != null ? _a : 0;
-      const intensity = val === 0 ? 0 : Math.ceil(val / maxVal * 4);
-      const cls = ["dashboard-heatmap-cell", `level-${intensity}`, dateStr === todayStr ? "today" : ""].join(" ").trim();
-      const cell = row.createDiv({ cls });
-      cell.textContent = String(d);
-      cell.title = `${dateStr}: ${val} \u6B21\u64CD\u4F5C`;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, m, day);
+        const dateStr = this.fmtDate(cellDate);
+        const val = (_a = data[dateStr]) != null ? _a : 0;
+        const intensity = val === 0 ? 0 : Math.ceil(val / maxVal * 4);
+        const isToday = dateStr === todayStr;
+        const isFuture = cellDate > now;
+        const cell = grid.createDiv({
+          cls: [
+            "dashboard-heatmap-cell",
+            `level-${intensity}`,
+            isToday ? "today" : "",
+            isFuture ? "future" : ""
+          ].filter(Boolean).join(" ")
+        });
+        if (!isFuture) {
+          cell.style.cursor = "pointer";
+          let tip = null;
+          cell.addEventListener("mouseenter", () => {
+            const rect = cell.getBoundingClientRect();
+            tip = document.body.createDiv("dashboard-heatmap-tip");
+            tip.textContent = `${dateStr}: ${val} \u6B21\u64CD\u4F5C`;
+            tip.style.top = `${rect.top - 28}px`;
+            tip.style.left = `${Math.min(rect.left, window.innerWidth - 160)}px`;
+          });
+          cell.addEventListener("mouseleave", () => {
+            tip == null ? void 0 : tip.remove();
+            tip = null;
+          });
+          cell.addEventListener("click", () => this.openOrCreateReport("daily", cellDate));
+        }
+      }
     }
     const legend = body.createDiv("dashboard-heatmap-legend");
-    legend.createEl("span", { text: "\u5C11 " });
+    legend.createEl("span", { text: "\u5C11", cls: "dashboard-heatmap-legend-label" });
     for (let i = 0; i <= 4; i++) {
       legend.createDiv({ cls: `dashboard-heatmap-cell level-${i} legend-cell` });
     }
-    legend.createEl("span", { text: " \u591A" });
-    body.createDiv({ text: "* \u6570\u636E\u4ECE\u5B89\u88C5\u63D2\u4EF6\u540E\u5F00\u59CB\u7D2F\u79EF", cls: "dashboard-heatmap-note" });
+    legend.createEl("span", { text: "\u591A", cls: "dashboard-heatmap-legend-label" });
+  }
+  resolveReportPath(type, date) {
+    const cfg = this.settings.reportConfigs[type];
+    const relPath = this.formatMomentDate(date, cfg.filenameFormat);
+    const dir = cfg.directory.replace(/^\/+|\/+$/g, "");
+    return dir ? `${dir}/${relPath}.md` : `${relPath}.md`;
+  }
+  async openOrCreateReport(type, date) {
+    const cfg = this.settings.reportConfigs[type];
+    const path = this.resolveReportPath(type, date);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof import_obsidian7.TFile) {
+      await this.app.workspace.getLeaf(false).openFile(file);
+      return;
+    }
+    const doCreate = async () => {
+      let content = "";
+      if (cfg.templatePath) {
+        const tpl = this.app.vault.getAbstractFileByPath(`${cfg.templatePath}.md`);
+        if (tpl instanceof import_obsidian7.TFile)
+          content = this.formatMomentDate(date, await this.app.vault.read(tpl));
+      }
+      const segs = path.split("/");
+      let acc = "";
+      for (let i = 0; i < segs.length - 1; i++) {
+        acc += (acc ? "/" : "") + segs[i];
+        if (!this.app.vault.getAbstractFileByPath(acc)) {
+          try {
+            await this.app.vault.createFolder(acc);
+          } catch (e) {
+          }
+        }
+      }
+      const created = await this.app.vault.create(path, content);
+      await this.app.workspace.getLeaf(false).openFile(created);
+    };
+    if (cfg.confirmBeforeCreate) {
+      const name = this.REPORT_NAMES[type];
+      new class extends import_obsidian7.Modal {
+        onOpen() {
+          this.contentEl.createEl("p", { text: `${name}\u4E0D\u5B58\u5728\uFF0C\u662F\u5426\u65B0\u5EFA\uFF1F` });
+          this.contentEl.createEl("p", { text: path, cls: "dashboard-field-hint" });
+          const btns = this.contentEl.createDiv("dashboard-confirm-btns");
+          btns.createEl("button", { text: "\u65B0\u5EFA", cls: "mod-cta" }).addEventListener("click", async () => {
+            this.close();
+            try {
+              await doCreate();
+            } catch (e) {
+              new import_obsidian7.Notice(`\u521B\u5EFA\u5931\u8D25: ${e.message}`);
+            }
+          });
+          btns.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+        }
+        onClose() {
+          this.contentEl.empty();
+        }
+      }(this.app).open();
+    } else {
+      try {
+        await doCreate();
+      } catch (e) {
+        new import_obsidian7.Notice(`\u521B\u5EFA${this.REPORT_NAMES[type]}\u5931\u8D25: ${e.message}`);
+      }
+    }
+  }
+  fmtDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  formatMomentDate(date, format) {
+    const y = String(date.getFullYear());
+    const m = String(date.getMonth() + 1);
+    const d = String(date.getDate());
+    const temp = new Date(date.getTime());
+    temp.setHours(0, 0, 0, 0);
+    temp.setDate(temp.getDate() + 3 - (temp.getDay() + 6) % 7);
+    const week1 = new Date(temp.getFullYear(), 0, 4);
+    const w = String(1 + Math.round(((temp.getTime() - week1.getTime()) / 864e5 - 3 + (week1.getDay() + 6) % 7) / 7));
+    const Q = String(Math.floor(date.getMonth() / 3) + 1);
+    let result = format.replace(/\[([^\]]+)\]/g, "$1");
+    result = result.replace(/YYYY/g, y).replace(/YY/g, y.slice(2)).replace(/MM/g, m.padStart(2, "0")).replace(/DD/g, d.padStart(2, "0")).replace(/ww/g, w.padStart(2, "0")).replace(/M/g, m).replace(/D/g, d).replace(/w/g, w).replace(/Q/g, Q);
+    return result;
   }
   // ─── Module 6: Plugin Manager ─────────────────────────────────────────────
   renderModule6(parent) {
@@ -1096,9 +1433,9 @@ var DashboardView = class extends import_obsidian6.ItemView {
           cb.disabled = true;
           try {
             await this.pluginService.togglePlugin(p.id, cb.checked);
-            new import_obsidian6.Notice(`${p.name} \u5DF2${cb.checked ? "\u542F\u7528" : "\u7981\u7528"}`);
+            new import_obsidian7.Notice(`${p.name} \u5DF2${cb.checked ? "\u542F\u7528" : "\u7981\u7528"}`);
           } catch (e) {
-            new import_obsidian6.Notice(`\u64CD\u4F5C\u5931\u8D25: ${e.message}`);
+            new import_obsidian7.Notice(`\u64CD\u4F5C\u5931\u8D25: ${e.message}`);
             cb.checked = !cb.checked;
           } finally {
             cb.disabled = false;
@@ -1117,10 +1454,10 @@ var DashboardView = class extends import_obsidian6.ItemView {
       const btn = shortcuts.createEl("button", { text: path, cls: "dashboard-shortcut-btn" });
       btn.addEventListener("click", async () => {
         const f = this.app.vault.getAbstractFileByPath(path);
-        if (f instanceof import_obsidian6.TFile) {
+        if (f instanceof import_obsidian7.TFile) {
           await this.app.workspace.getLeaf(false).openFile(f);
         } else {
-          new import_obsidian6.Notice(`\u672A\u627E\u5230: ${path}`);
+          new import_obsidian7.Notice(`\u672A\u627E\u5230: ${path}`);
         }
       });
     }
@@ -1168,7 +1505,7 @@ var DashboardView = class extends import_obsidian6.ItemView {
         item.addEventListener("mousedown", async (e) => {
           e.preventDefault();
           const f = this.app.vault.getAbstractFileByPath(filePath);
-          if (f instanceof import_obsidian6.TFile) {
+          if (f instanceof import_obsidian7.TFile) {
             await this.app.workspace.getLeaf(false).openFile(f);
           }
           remove();
@@ -1203,7 +1540,7 @@ var DashboardView = class extends import_obsidian6.ItemView {
 };
 
 // src/main.ts
-var LLMWikiDashboardPlugin = class extends import_obsidian7.Plugin {
+var LLMWikiDashboardPlugin = class extends import_obsidian8.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(
@@ -1235,7 +1572,16 @@ var LLMWikiDashboardPlugin = class extends import_obsidian7.Plugin {
     workspace.revealLeaf(leaf);
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    if (saved == null ? void 0 : saved.reportConfigs) {
+      this.settings.reportConfigs = Object.assign({}, DEFAULT_SETTINGS.reportConfigs);
+      for (const key of Object.keys(this.settings.reportConfigs)) {
+        if (saved.reportConfigs[key]) {
+          Object.assign(this.settings.reportConfigs[key], saved.reportConfigs[key]);
+        }
+      }
+    }
   }
   async saveSettings(settings) {
     if (settings)
@@ -1249,7 +1595,7 @@ var LLMWikiDashboardPlugin = class extends import_obsidian7.Plugin {
     });
   }
 };
-var DashboardSettingTab = class extends import_obsidian7.PluginSettingTab {
+var DashboardSettingTab = class extends import_obsidian8.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1258,32 +1604,32 @@ var DashboardSettingTab = class extends import_obsidian7.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "yyObsidianDashboard \u8BBE\u7F6E" });
-    new import_obsidian7.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
+    new import_obsidian8.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
       (text) => text.setPlaceholder("https://api.openai.com/v1").setValue(this.plugin.settings.apiBaseUrl).onChange(async (value) => {
         this.plugin.settings.apiBaseUrl = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5").addText((text) => {
+    new import_obsidian8.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5").addText((text) => {
       text.setPlaceholder("sk-...").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
         this.plugin.settings.apiKey = value;
         await this.plugin.saveSettings();
       });
       text.inputEl.type = "password";
     });
-    new import_obsidian7.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
+    new import_obsidian8.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
       (text) => text.setPlaceholder("gpt-4o").setValue(this.plugin.settings.modelName).onChange(async (value) => {
         this.plugin.settings.modelName = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setName("Temperature").addSlider(
+    new import_obsidian8.Setting(containerEl).setName("Temperature").addSlider(
       (slider) => slider.setLimits(0, 2, 0.1).setValue(this.plugin.settings.temperature).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.temperature = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setName("Max Tokens").addText(
+    new import_obsidian8.Setting(containerEl).setName("Max Tokens").addText(
       (text) => text.setValue(String(this.plugin.settings.maxTokens)).onChange(async (value) => {
         const n = parseInt(value);
         if (!isNaN(n)) {
@@ -1292,23 +1638,65 @@ var DashboardSettingTab = class extends import_obsidian7.PluginSettingTab {
         }
       })
     );
-    new import_obsidian7.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
+    new import_obsidian8.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
       (text) => text.setPlaceholder("https://...").setValue(this.plugin.settings.tokenUsageApiUrl).onChange(async (value) => {
         this.plugin.settings.tokenUsageApiUrl = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
+    new import_obsidian8.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
       (text) => text.setPlaceholder("https://...").setValue(this.plugin.settings.tokenBalanceApiUrl).onChange(async (value) => {
         this.plugin.settings.tokenBalanceApiUrl = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian7.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
+    new import_obsidian8.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
       (text) => text.setValue(this.plugin.settings.trackedFolders.join(", ")).onChange(async (value) => {
         this.plugin.settings.trackedFolders = value.split(",").map((s) => s.trim()).filter(Boolean);
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("h3", { text: "\u62A5\u8868\u914D\u7F6E" });
+    const reportLabels = {
+      daily: "\u65E5\u62A5",
+      weekly: "\u5468\u62A5",
+      monthly: "\u6708\u62A5",
+      quarterly: "\u5B63\u62A5",
+      yearly: "\u5E74\u62A5"
+    };
+    for (const type of Object.keys(reportLabels)) {
+      const cfg = this.plugin.settings.reportConfigs[type];
+      containerEl.createEl("h4", { text: reportLabels[type] });
+      new import_obsidian8.Setting(containerEl).setName("\u542F\u7528").addToggle(
+        (toggle) => toggle.setValue(cfg.enabled).onChange(async (value) => {
+          cfg.enabled = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian8.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
+        (toggle) => toggle.setValue(cfg.confirmBeforeCreate).onChange(async (value) => {
+          cfg.confirmBeforeCreate = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian8.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
+        (text) => text.setValue(cfg.directory).onChange(async (value) => {
+          cfg.directory = value.trim();
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian8.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc(`\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD`).addText(
+        (text) => text.setValue(cfg.filenameFormat).onChange(async (value) => {
+          cfg.filenameFormat = value.trim();
+          await this.plugin.saveSettings();
+        })
+      );
+      new import_obsidian8.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
+        (text) => text.setValue(cfg.templatePath).onChange(async (value) => {
+          cfg.templatePath = value.trim();
+          await this.plugin.saveSettings();
+        })
+      );
+    }
   }
 };

@@ -115,7 +115,8 @@ export class FileService {
   async toggleFolderInExplorer(name: string): Promise<void> {
     let leaves = this.app.workspace.getLeavesOfType("file-explorer");
     if (leaves.length === 0) {
-      await this.app.workspace.getLeftLeaf(false).setViewState({ type: "file-explorer" });
+      const leaf = this.app.workspace.getLeftLeaf(false);
+      if (leaf) await leaf.setViewState({ type: "file-explorer" });
       leaves = this.app.workspace.getLeavesOfType("file-explorer");
     }
     if (leaves.length === 0) return;

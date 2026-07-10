@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, TFile, Notice, requestUrl } from "obsidian";
+import { ItemView, WorkspaceLeaf, TFile, Notice, requestUrl, Modal } from "obsidian";
 import { DashboardSettings, FileStats, LogEntry, TokenUsage } from "../types";
 import { FileService } from "../services/FileService";
 import { LogService } from "../services/LogService";
@@ -7,6 +7,7 @@ import { PluginManageService } from "../services/PluginManageService";
 import { HeatmapService } from "../services/HeatmapService";
 import { ModelConfigModal } from "../modals/ModelConfigModal";
 import { FolderConfigModal } from "../modals/FolderConfigModal";
+import { ReportConfigModal } from "../modals/ReportConfigModal";
 
 export const DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
 
@@ -21,6 +22,7 @@ export class DashboardView extends ItemView {
   private heatmapService: HeatmapService;
 
   private executing = false;
+  private currentHeatmapYear = new Date().getFullYear();
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -63,9 +65,9 @@ export class DashboardView extends ItemView {
     await this.renderHeader(container);
     const scroll = container.createDiv("dashboard-scroll");
     await this.renderModule1(scroll);
+    this.renderModule5(scroll);
     await this.renderModule3(scroll);
     this.renderModule4(scroll);
-    this.renderModule5(scroll);
     this.renderModule6(scroll);
     this.renderFooter(scroll);
   }
@@ -105,7 +107,7 @@ export class DashboardView extends ItemView {
     let thisMonth = 0;
     try {
       const store = this.loadLocalTokenStore();
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = this.fmtDate(new Date());
       const monthPrefix = todayStr.slice(0, 7);
       today = store[todayStr] ?? 0;
       for (const [date, tokens] of Object.entries(store)) {
@@ -329,53 +331,231 @@ export class DashboardView extends ItemView {
   // ─── Module 5: Heatmap ───────────────────────────────────────────────────
 
   private renderModule5(parent: HTMLElement) {
-    const mod = this.createModule(parent, "🗓", "工作热力图");
-    const body = mod.createDiv("dashboard-module-body");
+    const mod = parent.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.createEl("span", { text: "🗓 工作热力图", cls: "dashboard-module-title" });
 
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
-    const data = this.heatmapService.getMonthData(year, month);
-    const maxVal = Math.max(...Object.values(data), 1);
-
-    body.createDiv({ text: `${year}年${month}月`, cls: "dashboard-heatmap-title" });
-
-    const calEl = body.createDiv("dashboard-heatmap-cal");
-    const headerRow = calEl.createDiv("dashboard-heatmap-row");
-    for (const d of ["一", "二", "三", "四", "五", "六", "日"]) {
-      headerRow.createDiv({ text: d, cls: "dashboard-heatmap-cell heatmap-header" });
-    }
-
-    const firstDay = new Date(year, month - 1, 1).getDay();
-    const adjustedFirst = (firstDay === 0 ? 7 : firstDay) - 1;
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const todayStr = now.toISOString().slice(0, 10);
-
-    let row = calEl.createDiv("dashboard-heatmap-row");
-    for (let i = 0; i < adjustedFirst; i++) {
-      row.createDiv({ cls: "dashboard-heatmap-cell empty" });
-    }
-
-    for (let d = 1; d <= daysInMonth; d++) {
-      if ((adjustedFirst + d - 1) % 7 === 0 && d > 1) {
-        row = calEl.createDiv("dashboard-heatmap-row");
+    const yearNav = header.createDiv("dashboard-heatmap-year-nav");
+    const prevBtn = yearNav.createEl("span", { text: "◀", cls: "dashboard-heatmap-year-arrow" });
+    const yearLabel = yearNav.createEl("span", { text: String(this.currentHeatmapYear), cls: "dashboard-heatmap-year-label clickable" });
+    yearLabel.addEventListener("click", () => {
+      if (this.settings.reportConfigs.yearly.enabled) {
+        this.openOrCreateReport("yearly", new Date(this.currentHeatmapYear, 0, 1));
       }
-      const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const val = data[dateStr] ?? 0;
-      const intensity = val === 0 ? 0 : Math.ceil((val / maxVal) * 4);
-      const cls = ["dashboard-heatmap-cell", `level-${intensity}`, dateStr === todayStr ? "today" : ""].join(" ").trim();
-      const cell = row.createDiv({ cls });
-      cell.textContent = String(d);
-      cell.title = `${dateStr}: ${val} 次操作`;
+    });
+    const nextBtn = yearNav.createEl("span", { text: "▶", cls: "dashboard-heatmap-year-arrow" });
+
+    // Config button with gear icon
+    const cfgBtn = yearNav.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "日报/周报配置" });
+    cfgBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    cfgBtn.addEventListener("click", () => {
+      new ReportConfigModal(this.app, this.settings.reportConfigs, async (configs) => {
+        this.settings.reportConfigs = configs;
+        await this.onSettingsChange(this.settings);
+      }).open();
+    });
+
+    const thisYear = new Date().getFullYear();
+    if (this.currentHeatmapYear >= thisYear) nextBtn.addClass("disabled");
+
+    prevBtn.addEventListener("click", () => {
+      this.currentHeatmapYear--;
+      this.render();
+    });
+    nextBtn.addEventListener("click", () => {
+      if (this.currentHeatmapYear < thisYear) {
+        this.currentHeatmapYear++;
+        this.render();
+      }
+    });
+
+    const body = mod.createDiv("dashboard-module-body");
+    const now = new Date();
+    const todayStr = this.fmtDate(now);
+    const data = this.heatmapService.getData();
+    const maxVal = Math.max(...Object.values(data), 1);
+    const year = this.currentHeatmapYear;
+
+    const DAYS = ["Mon", "", "Wed", "", "Fri", "", "Sun"];
+
+    const mainWrap = body.createDiv("dashboard-heatmap-main-wrap");
+
+    // Day labels column (with spacer to align past month labels)
+    const dayCol = mainWrap.createDiv("dashboard-heatmap-days");
+    dayCol.createDiv({ cls: "dashboard-heatmap-days-spacer" });
+    for (const d of DAYS) {
+      dayCol.createDiv({ text: d, cls: "dashboard-heatmap-day-label" });
     }
 
+    // Months container
+    const monthsWrap = mainWrap.createDiv("dashboard-heatmap-months-wrap");
+
+    for (let m = 0; m < 12; m++) {
+      const monthBlock = monthsWrap.createDiv("dashboard-heatmap-month-block");
+
+      const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      // Month label - clickable → monthly report
+      const monthLabel = monthBlock.createDiv({ text: MONTHS[m], cls: "dashboard-heatmap-month-label clickable" });
+      monthLabel.addEventListener("click", () => {
+        if (this.settings.reportConfigs.monthly.enabled) {
+          this.openOrCreateReport("monthly", new Date(year, m, 1));
+        }
+      });
+
+      // Compute alignment offset for the 1st day of the month
+      const firstDay = new Date(year, m, 1);
+      const firstDow = firstDay.getDay();
+      const startOffset = firstDow === 0 ? 6 : firstDow - 1;
+      const daysInMonth = new Date(year, m + 1, 0).getDate();
+
+      // Mini grid for this month
+      const grid = monthBlock.createDiv("dashboard-heatmap-grid");
+
+      // Empty placeholder cells before the 1st for weekday alignment
+      for (let p = 0; p < startOffset; p++) {
+        grid.createDiv({ cls: "dashboard-heatmap-cell future" });
+      }
+
+      // Actual day cells (1st through last day, no adjacent-month days)
+      for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, m, day);
+        const dateStr = this.fmtDate(cellDate);
+        const val = data[dateStr] ?? 0;
+        const intensity = val === 0 ? 0 : Math.ceil((val / maxVal) * 4);
+        const isToday = dateStr === todayStr;
+        const isFuture = cellDate > now;
+
+        const cell = grid.createDiv({
+          cls: [
+            "dashboard-heatmap-cell",
+            `level-${intensity}`,
+            isToday ? "today" : "",
+            isFuture ? "future" : "",
+          ].filter(Boolean).join(" "),
+        });
+
+        if (!isFuture) {
+          cell.style.cursor = "pointer";
+          let tip: HTMLElement | null = null;
+          cell.addEventListener("mouseenter", () => {
+            const rect = cell.getBoundingClientRect();
+            tip = document.body.createDiv("dashboard-heatmap-tip");
+            tip.textContent = `${dateStr}: ${val} 次操作`;
+            tip.style.top = `${rect.top - 28}px`;
+            tip.style.left = `${Math.min(rect.left, window.innerWidth - 160)}px`;
+          });
+          cell.addEventListener("mouseleave", () => {
+            tip?.remove();
+            tip = null;
+          });
+          cell.addEventListener("click", () => this.openOrCreateReport("daily", cellDate));
+        }
+      }
+    }
+
+    // Legend
     const legend = body.createDiv("dashboard-heatmap-legend");
-    legend.createEl("span", { text: "少 " });
+    legend.createEl("span", { text: "少", cls: "dashboard-heatmap-legend-label" });
     for (let i = 0; i <= 4; i++) {
       legend.createDiv({ cls: `dashboard-heatmap-cell level-${i} legend-cell` });
     }
-    legend.createEl("span", { text: " 多" });
-    body.createDiv({ text: "* 数据从安装插件后开始累积", cls: "dashboard-heatmap-note" });
+    legend.createEl("span", { text: "多", cls: "dashboard-heatmap-legend-label" });
+  }
+
+  private resolveReportPath(type: "daily"|"weekly"|"monthly"|"quarterly"|"yearly", date: Date): string {
+    const cfg = this.settings.reportConfigs[type];
+    const relPath = this.formatMomentDate(date, cfg.filenameFormat);
+    const dir = cfg.directory.replace(/^\/+|\/+$/g, '');
+    return dir ? `${dir}/${relPath}.md` : `${relPath}.md`;
+  }
+
+  private REPORT_NAMES: Record<string, string> = {
+    daily: "日报", weekly: "周报", monthly: "月报", quarterly: "季报", yearly: "年报",
+  };
+
+  private async openOrCreateReport(type: "daily"|"weekly"|"monthly"|"quarterly"|"yearly", date: Date) {
+    const cfg = this.settings.reportConfigs[type];
+    const path = this.resolveReportPath(type, date);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) {
+      await this.app.workspace.getLeaf(false).openFile(file);
+      return;
+    }
+
+    const doCreate = async () => {
+      let content = "";
+      if (cfg.templatePath) {
+        const tpl = this.app.vault.getAbstractFileByPath(`${cfg.templatePath}.md`);
+        if (tpl instanceof TFile) content = this.formatMomentDate(date, await this.app.vault.read(tpl));
+      }
+      const segs = path.split("/");
+      let acc = "";
+      for (let i = 0; i < segs.length - 1; i++) {
+        acc += (acc ? "/" : "") + segs[i];
+        if (!this.app.vault.getAbstractFileByPath(acc)) {
+          try { await this.app.vault.createFolder(acc); } catch { /* race */ }
+        }
+      }
+      const created = await this.app.vault.create(path, content);
+      await this.app.workspace.getLeaf(false).openFile(created);
+    };
+
+    if (cfg.confirmBeforeCreate) {
+      const name = this.REPORT_NAMES[type];
+      new (class extends Modal {
+        onOpen() {
+          this.contentEl.createEl("p", { text: `${name}不存在，是否新建？` });
+          this.contentEl.createEl("p", { text: path, cls: "dashboard-field-hint" });
+          const btns = this.contentEl.createDiv("dashboard-confirm-btns");
+          btns.createEl("button", { text: "新建", cls: "mod-cta" }).addEventListener("click", async () => {
+            this.close();
+            try { await doCreate(); } catch (e: any) { new Notice(`创建失败: ${e.message}`); }
+          });
+          btns.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+        }
+        onClose() { this.contentEl.empty(); }
+      })(this.app).open();
+    } else {
+      try { await doCreate(); } catch (e: any) { new Notice(`创建${this.REPORT_NAMES[type]}失败: ${e.message}`); }
+    }
+  }
+
+  private fmtDate(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  private formatMomentDate(date: Date, format: string): string {
+    const y = String(date.getFullYear());
+    const m = String(date.getMonth() + 1);
+    const d = String(date.getDate());
+
+    // ISO week number
+    const temp = new Date(date.getTime());
+    temp.setHours(0, 0, 0, 0);
+    temp.setDate(temp.getDate() + 3 - (temp.getDay() + 6) % 7);
+    const week1 = new Date(temp.getFullYear(), 0, 4);
+    const w = String(1 + Math.round(((temp.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7));
+
+    // Quarter
+    const Q = String(Math.floor(date.getMonth() / 3) + 1);
+
+    // Replace bracket literals [X] first
+    let result = format.replace(/\[([^\]]+)\]/g, "$1");
+
+    // Replace tokens (longer ones first)
+    result = result
+      .replace(/YYYY/g, y)
+      .replace(/YY/g, y.slice(2))
+      .replace(/MM/g, m.padStart(2, '0'))
+      .replace(/DD/g, d.padStart(2, '0'))
+      .replace(/ww/g, w.padStart(2, '0'))
+      .replace(/M/g, m)
+      .replace(/D/g, d)
+      .replace(/w/g, w)
+      .replace(/Q/g, Q);
+
+    return result;
   }
 
   // ─── Module 6: Plugin Manager ─────────────────────────────────────────────
