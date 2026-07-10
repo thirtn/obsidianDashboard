@@ -147,7 +147,7 @@
 }
 
 .dashboard-folder-row-name {
-  width: 100px;
+  width: 160px;
   flex-shrink: 0;
   color: var(--text-muted);
   overflow: hidden;
