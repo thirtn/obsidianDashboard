@@ -80,6 +80,8 @@ export class ReportConfigModal extends Modal {
     contentEl.createDiv({ text: TOKEN_HELP, cls: "dashboard-field-hint" });
 
     const actions = contentEl.createDiv("dashboard-modal-actions");
+    actions.style.cssText = "justify-content:flex-end;";
+    actions.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
     const saveBtn = actions.createEl("button", { text: "保存", cls: "mod-cta" });
     saveBtn.addEventListener("click", () => {
       this.onSave(this.configs);

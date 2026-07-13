@@ -5,9 +5,11 @@ import { LogService } from "../services/LogService";
 import { LLMService } from "../services/LLMService";
 import { PluginManageService } from "../services/PluginManageService";
 import { HeatmapService } from "../services/HeatmapService";
+import { GitService, GitFileStatus } from "../services/GitService";
 import { ModelConfigModal } from "../modals/ModelConfigModal";
 import { FolderConfigModal } from "../modals/FolderConfigModal";
 import { ReportConfigModal } from "../modals/ReportConfigModal";
+import { GitConfigModal } from "../modals/GitConfigModal";
 
 export const DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
 
@@ -20,10 +22,14 @@ export class DashboardView extends ItemView {
   private llmService: LLMService;
   private pluginService: PluginManageService;
   private heatmapService: HeatmapService;
+  private gitService: GitService;
 
   private executing = false;
+  private rendering = false;
+  private needsRerender = false;
   private currentHeatmapYear = new Date().getFullYear();
   private autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoPushTimer: ReturnType<typeof setInterval> | null = null;
   private onVaultChange?: (file: any) => void;
   private onActiveLeafChange?: (leaf: WorkspaceLeaf) => void;
   private lastRenderTime = 0;
@@ -44,15 +50,21 @@ export class DashboardView extends ItemView {
     this.llmService = new LLMService(settings);
     this.pluginService = new PluginManageService(this.app);
     this.heatmapService = new HeatmapService(this.app);
+    this.gitService = new GitService(this.app);
   }
 
   getViewType() { return DASHBOARD_VIEW_TYPE; }
-  getDisplayText() { return "yyObsidianDashboard"; }
+  getDisplayText() { return this.settings.dashboardTitle || "Dashboard"; }
   getIcon() { return "layout-dashboard"; }
 
   updateSettings(settings: DashboardSettings) {
     this.settings = settings;
     this.llmService.updateSettings(settings);
+    // Update tab title
+    const title = this.settings.dashboardTitle || "Dashboard";
+    const titleEl = (this.leaf as any).tabHeaderEl?.querySelector(".workspace-tab-header-inner-title");
+    if (titleEl) titleEl.textContent = title;
+    this.render();
   }
 
   async onOpen() {
@@ -67,11 +79,26 @@ export class DashboardView extends ItemView {
         const statsContainer = document.getElementById("dashboard-file-stats-container");
         if (statsContainer) this.renderFileStats(statsContainer);
       }, 800);
+
+      // Auto-push on vault change (when interval === 0)
+      if (
+        this.settings.gitEnabled &&
+        this.settings.gitAutoPushEnabled &&
+        this.settings.gitAutoPushInterval === 0
+      ) {
+        if (this.autoPushDebounceTimer) clearTimeout(this.autoPushDebounceTimer);
+        this.autoPushDebounceTimer = setTimeout(() => {
+          this.doAutoPush();
+        }, 5000); // 5s debounce
+      }
     };
     this.app.vault.on("modify", this.onVaultChange);
     this.app.vault.on("create", this.onVaultChange);
     this.app.vault.on("delete", this.onVaultChange);
     this.app.vault.on("rename", this.onVaultChange);
+
+    // Auto-push setup
+    this.setupAutoPush();
 
     // Auto-refresh when user switches back to this dashboard tab
     this.onActiveLeafChange = (leaf: WorkspaceLeaf) => {
@@ -108,33 +135,66 @@ export class DashboardView extends ItemView {
       this.app.workspace.off("active-leaf-change", this.onActiveLeafChange);
     }
     if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
+    if (this.autoPushTimer) clearInterval(this.autoPushTimer);
     if (this.visibilityTimer) clearInterval(this.visibilityTimer);
   }
 
   async render() {
-    this.lastRenderTime = Date.now();
-    const container = this.containerEl.children[1] as HTMLElement;
-    container.empty();
-    container.addClass("dashboard-root");
+    if (this.rendering) {
+      this.needsRerender = true;
+      return;
+    }
+    this.rendering = true;
+    this.needsRerender = false;
+    try {
+      this.lastRenderTime = Date.now();
+      const container = this.containerEl.children[1] as HTMLElement;
 
-    await this.renderHeader(container);
-    this.renderSearch(container);
-    const scroll = container.createDiv("dashboard-scroll");
-    await this.renderModule1(scroll);
-    this.renderModule5(scroll);
-    this.renderModule4(scroll);
-    this.renderModule6(scroll);
-    this.renderTaskQuickAdd(scroll);
+      // Save scroll position before rebuilding DOM
+      const oldScroll = container.querySelector(".dashboard-scroll") as HTMLElement | null;
+      const scrollTop = oldScroll?.scrollTop ?? 0;
+
+      // Build new content off-screen to avoid visible flash/jitter
+      const offscreen = document.createElement("div");
+      offscreen.addClass("dashboard-root");
+
+      this.renderHeader(offscreen);
+      this.renderSearch(offscreen);
+      const scroll = offscreen.createDiv("dashboard-scroll");
+      this.renderModule1(scroll);
+      this.renderModule5(scroll);
+      this.renderModule4(scroll);
+      this.renderGitModule(scroll);
+      this.renderTaskQuickAdd(scroll);
+      this.renderModule6(scroll);
+
+      // Atomic swap + restore scroll position in one synchronous block
+      container.replaceChildren(offscreen);
+      scroll.scrollTop = scrollTop;
+    } finally {
+      this.rendering = false;
+      if (this.needsRerender) {
+        this.needsRerender = false;
+        await this.render();
+      }
+    }
   }
 
   // ─── Header ────────────────────────────────────────────────────────────────
 
-  private async renderHeader(parent: HTMLElement) {
+  private renderHeader(parent: HTMLElement) {
     const header = parent.createDiv("dashboard-header");
     const titleRow = header.createDiv("dashboard-header-title-row");
-    titleRow.createEl("h2", { text: "yyObsidianDashboard", cls: "dashboard-title" });
+    titleRow.createEl("h2", { text: this.settings.dashboardTitle || "Dashboard", cls: "dashboard-title" });
 
     const actions = titleRow.createDiv("dashboard-header-actions");
+
+    if (this.settings.dashboardDesc) {
+      header.createDiv({
+        text: this.settings.dashboardDesc,
+        cls: "dashboard-desc",
+      });
+    }
 
     const refreshBtn = actions.createEl("button", { cls: "dashboard-icon-btn", title: "刷新" });
     refreshBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
@@ -156,14 +216,14 @@ export class DashboardView extends ItemView {
       metaRow.createEl("span", { text: `Obsidian v${obsVersion}`, cls: "dashboard-version-label" });
     }
 
-    await this.renderHeaderTokenUsage(header);
+    this.renderHeaderTokenUsage(header);
   }
 
-  private async renderHeaderTokenUsage(header: HTMLElement) {
+  private renderHeaderTokenUsage(header: HTMLElement) {
     const bar = header.createDiv("dashboard-header-token");
     bar.setAttribute("id", "dashboard-token-bar");
 
-    // Local token stats
+    // Local token stats (synchronous, to avoid layout jitter)
     let today = 0;
     let thisMonth = 0;
     try {
@@ -176,22 +236,6 @@ export class DashboardView extends ItemView {
       }
     } catch { /* ignore */ }
 
-    // Balance API
-    let balanceInfo: import("../types").BalanceItem[] | null = null;
-    if (this.settings.tokenBalanceApiUrl && this.settings.apiKey) {
-      try {
-        const resp = await requestUrl({
-          url: this.settings.tokenBalanceApiUrl,
-          method: "GET",
-          headers: { Authorization: `Bearer ${this.settings.apiKey}` },
-          throw: false,
-        });
-        if (resp.status === 200 && resp.json?.balance_infos) {
-          balanceInfo = resp.json.balance_infos;
-        }
-      } catch { /* ignore */ }
-    }
-
     const makeChip = (label: string, value: string) => {
       const chip = bar.createDiv("dashboard-token-chip");
       chip.createEl("span", { text: label, cls: "dashboard-token-chip-label" });
@@ -201,10 +245,23 @@ export class DashboardView extends ItemView {
     makeChip("今日", `${today.toLocaleString()} tokens`);
     makeChip("本月", `${thisMonth.toLocaleString()} tokens`);
 
-    if (balanceInfo && balanceInfo.length > 0) {
-      for (const item of balanceInfo) {
-        makeChip(`余额(${item.currency})`, item.total_balance);
-      }
+    // Balance API (async, fire-and-forget — adds chips when done)
+    if (this.settings.tokenBalanceApiUrl && this.settings.apiKey) {
+      (async () => {
+        try {
+          const resp = await requestUrl({
+            url: this.settings.tokenBalanceApiUrl,
+            method: "GET",
+            headers: { Authorization: `Bearer ${this.settings.apiKey}` },
+            throw: false,
+          });
+          if (resp.status === 200 && resp.json?.balance_infos) {
+            for (const item of resp.json.balance_infos) {
+              makeChip(`余额(${item.currency})`, item.total_balance);
+            }
+          }
+        } catch { /* ignore */ }
+      })();
     }
   }
 
@@ -335,7 +392,6 @@ export class DashboardView extends ItemView {
       new FolderConfigModal(this.app, this.settings, this.fileService, async (s) => {
         await this.onSettingsChange(s);
         this.updateSettings(s);
-        await this.render();
       }).open();
     });
 
@@ -827,6 +883,595 @@ export class DashboardView extends ItemView {
     }
   }
 
+  // ─── Module 7: Git Sync ──────────────────────────────────────────────────
+
+  private async renderGitModule(parent: HTMLElement) {
+    const mod = parent.createDiv("dashboard-module");
+    mod.id = "dashboard-git-module";
+    await this.buildGitModuleContent(mod);
+  }
+
+  private async refreshGitModule() {
+    const mod = document.getElementById("dashboard-git-module");
+    if (!mod) { await this.render(); return; }
+    mod.empty();
+    await this.buildGitModuleContent(mod);
+  }
+
+  private async buildGitModuleContent(mod: HTMLElement) {
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    const titleWrap = header.createDiv();
+    titleWrap.style.cssText = "display:flex;align-items:center;gap:8px;";
+    titleWrap.createEl("span", { text: "🔗 Git 同步", cls: "dashboard-module-title" });
+
+    const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "Git 同步配置" });
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => {
+      new GitConfigModal(this.app, this.settings, async (s) => {
+        await this.onSettingsChange(s);
+        this.updateSettings(s);
+        this.setupAutoPush();
+      }).open();
+    });
+
+    const body = mod.createDiv("dashboard-module-body");
+
+    if (!this.settings.gitEnabled) {
+      body.createDiv({
+        text: "Git 同步未启用。请在设置中配置 Gitee 仓库信息并开启同步。",
+        cls: "dashboard-git-mobile-hint",
+      });
+      const settingsBtn = body.createEl("button", {
+        text: "打开设置",
+        cls: "mod-cta",
+      });
+      settingsBtn.style.cssText = "width:100%;margin-top:8px;";
+      settingsBtn.addEventListener("click", () => {
+        // @ts-ignore - open settings tab
+        const settingTabs = (this.app as any).setting;
+        if (settingTabs) {
+          settingTabs.open();
+          settingTabs.openTabById("yy-obsidian-dashboard");
+        }
+      });
+      return;
+    }
+
+    if (this.gitService.isMobile) {
+      body.createDiv({
+        text: "Git 同步仅在桌面端 Obsidian 可用。请使用桌面端进行 Push/Pull 操作。",
+        cls: "dashboard-git-mobile-hint",
+      });
+      return;
+    }
+
+    // Check if git repo exists
+    const isRepo = await this.gitService.isGitRepo();
+
+    if (!isRepo) {
+      body.createDiv({
+        text: "当前 vault 尚未初始化 Git 仓库",
+        cls: "dashboard-git-notice",
+      });
+      const initBtn = body.createEl("button", {
+        text: "初始化 Git 仓库",
+        cls: "mod-cta dashboard-git-init-btn",
+      });
+      initBtn.addEventListener("click", async () => {
+        initBtn.disabled = true;
+        initBtn.textContent = "初始化中...";
+        try {
+          await this.gitService.initRepo();
+          if (this.settings.gitRemoteURL) {
+            await this.gitService.ensureRemote(
+              this.settings.gitRemoteURL,
+              this.settings.gitRemoteName
+            );
+          }
+          new Notice("Git 仓库初始化成功");
+          await this.render();
+        } catch (e: any) {
+          new Notice(`初始化失败: ${e.message}`);
+          initBtn.disabled = false;
+          initBtn.textContent = "初始化 Git 仓库";
+        }
+      });
+      return;
+    }
+
+    // Check if remote exists
+    let remoteOk = true;
+    if (this.settings.gitRemoteURL) {
+      try {
+        await this.gitService.ensureRemote(
+          this.settings.gitRemoteURL,
+          this.settings.gitRemoteName
+        );
+      } catch {
+        remoteOk = false;
+      }
+    }
+
+    // Status
+    let status: import("../services/GitService").GitStatus = {
+      clean: true,
+      files: [],
+      ahead: 0,
+      behind: 0,
+    };
+    try {
+      status = await this.gitService.getStatus();
+    } catch { /* ignore */ }
+
+    // Status indicator
+    const statusRow = body.createDiv("dashboard-git-status");
+    const dot = statusRow.createDiv(
+      `dashboard-git-status-dot ${status.clean ? "clean" : "dirty"}`
+    );
+    const statusText = statusRow.createDiv("dashboard-git-status-text");
+    if (status.clean && status.ahead === 0 && status.behind === 0) {
+      statusText.createEl("span", { text: "已同步，工作区干净" });
+    } else {
+      if (!status.clean) {
+        const fileSpan = statusText.createEl("span", {
+          text: `${status.files.length} 个文件已变更`,
+          cls: "dashboard-git-files-link",
+        });
+        this.attachFileListPopover(fileSpan, status.files);
+      }
+      if (status.ahead > 0) {
+        if (!status.clean) statusText.createEl("span", { text: " | " });
+        statusText.createEl("span", { text: `领先 ${status.ahead} 个提交` });
+      }
+      if (status.behind > 0) {
+        if (!status.clean || status.ahead > 0) statusText.createEl("span", { text: " | " });
+        statusText.createEl("span", { text: `落后 ${status.behind} 个提交` });
+      }
+    }
+
+    if (!remoteOk) {
+      statusRow.createDiv({
+        text: "未能配置远程仓库，请检查仓库地址",
+        cls: "dashboard-git-warn",
+      });
+    }
+
+    // Action buttons
+    const actions = body.createDiv("dashboard-git-actions");
+
+    const pullBtn = actions.createEl("button", {
+      text: "⬇ Pull",
+      cls: "dashboard-git-btn",
+      title: "从远程拉取最新代码",
+    });
+    pullBtn.addEventListener("click", async () => {
+      pullBtn.disabled = true;
+      pullBtn.textContent = "拉取中...";
+      try {
+        const result = await this.gitService.pull(
+          this.settings.gitRemoteName,
+          this.settings.gitBranchName,
+          this.settings.gitUsername || undefined,
+          this.settings.gitPassword || undefined
+        );
+        new Notice(result);
+        await this.refreshGitModule();
+      } catch (e: any) {
+        new Notice(`Pull 失败: ${e.message}`);
+      } finally {
+        pullBtn.disabled = false;
+        pullBtn.textContent = "⬇ Pull";
+      }
+    });
+
+    const pushBtn = actions.createEl("button", {
+      text: "⬆ Push",
+      cls: "mod-cta dashboard-git-btn",
+      title: "提交并推送所有变更",
+    });
+    pushBtn.addEventListener("click", async () => {
+      const files = await this.gitService.getStatusFiles();
+      if (files.length === 0) {
+        new Notice("没有需要提交的文件");
+        return;
+      }
+      this.showPushConfirmModal(files);
+    });
+
+    const rollbackBtn = actions.createEl("button", {
+      text: "↩ Rollback",
+      cls: "dashboard-git-btn",
+      title: "回滚未暂存的变更",
+    });
+    rollbackBtn.addEventListener("click", async () => {
+      const files = await this.gitService.getStatusFiles();
+      const modified = files.filter((f) => f.status[1] !== " ");
+      if (modified.length === 0) {
+        new Notice("没有可以回滚的变更");
+        return;
+      }
+      this.showRollbackConfirmModal(modified);
+    });
+
+    // Refresh status button
+    const refreshBtn = actions.createEl("button", {
+      text: "刷新状态",
+      cls: "dashboard-git-btn",
+    });
+    refreshBtn.addEventListener("click", () => this.refreshGitModule());
+
+    // Auto-push quick toggle
+    const autoRow = body.createDiv("dashboard-git-auto-row");
+    const autoLabel = autoRow.createEl("label", { cls: "dashboard-git-auto-label" });
+    autoLabel.createEl("span", { text: "自动 Push" });
+    const autoToggle = autoLabel.createEl("input") as HTMLInputElement;
+    autoToggle.type = "checkbox";
+    autoToggle.checked = this.settings.gitAutoPushEnabled;
+    autoToggle.addEventListener("change", async () => {
+      this.settings.gitAutoPushEnabled = autoToggle.checked;
+      await this.onSettingsChange(this.settings);
+      this.setupAutoPush();
+    });
+    autoRow.createEl("span", {
+      text: this.settings.gitAutoPushInterval === 0
+        ? "每次变更后自动推送"
+        : `每 ${this.settings.gitAutoPushInterval} 分钟自动推送`,
+      cls: "dashboard-git-auto-hint",
+    });
+
+    // Recent commits
+    const commits = await this.gitService.getRecentCommits(5);
+    if (commits.length > 0) {
+      const commitSection = body.createDiv("dashboard-git-commits");
+      commitSection.createEl("span", {
+        text: "最近提交",
+        cls: "dashboard-git-commits-title",
+      });
+      for (const c of commits) {
+        const row = commitSection.createDiv("dashboard-git-commit-row");
+        row.createEl("span", { text: c.hash, cls: "dashboard-git-commit-hash" });
+        row.createEl("span", { text: c.message, cls: "dashboard-git-commit-msg" });
+        row.createEl("span", {
+          text: this.formatGitDate(c.date),
+          cls: "dashboard-git-commit-date",
+        });
+      }
+    }
+  }
+
+  private setupAutoPush() {
+    // Clear existing timer
+    if (this.autoPushTimer) {
+      clearInterval(this.autoPushTimer);
+      this.autoPushTimer = null;
+    }
+
+    if (!this.settings.gitEnabled || !this.settings.gitAutoPushEnabled) return;
+    if (this.gitService.isMobile) return;
+    if (!this.settings.gitRemoteURL) return;
+
+    const interval = this.settings.gitAutoPushInterval;
+    if (interval > 0) {
+      this.autoPushTimer = setInterval(() => {
+        this.doAutoPush();
+      }, interval * 60 * 1000);
+    }
+    // interval === 0 means push on vault change (handled via onVaultChange debounce)
+  }
+
+  private autoPushDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private async doAutoPush() {
+    if (this.gitService.isMobile) return;
+    try {
+      const isRepo = await this.gitService.isGitRepo();
+      if (!isRepo) return;
+      const msg = this.buildCommitMessage();
+      await this.gitService.pushAll(
+        this.settings.gitRemoteName,
+        this.settings.gitBranchName,
+        msg,
+        this.settings.gitUsername || undefined,
+        this.settings.gitPassword || undefined
+      );
+      console.log("[yyDashboard] Auto push completed");
+    } catch (e: any) {
+      console.log(`[yyDashboard] Auto push failed: ${e.message}`);
+    }
+  }
+
+  private buildCommitMessage(): string {
+    const now = new Date();
+    const date = this.fmtDate(now);
+    const time = now.toTimeString().slice(0, 8);
+    return this.settings.gitCommitTemplate
+      .replace(/\{\{date\}\}/g, date)
+      .replace(/\{\{time\}\}/g, time);
+  }
+
+  private formatGitDate(dateStr: string): string {
+    try {
+      const d = new Date(dateStr);
+      const now = new Date();
+      const diff = Math.floor((now.getTime() - d.getTime()) / 60000);
+      if (diff < 1) return "刚刚";
+      if (diff < 60) return `${diff} 分钟前`;
+      if (diff < 1440) return `${Math.floor(diff / 60)} 小时前`;
+      if (diff < 43200) return `${Math.floor(diff / 1440)} 天前`;
+      return dateStr.slice(0, 10);
+    } catch {
+      return dateStr;
+    }
+  }
+
+  private attachFileListPopover(trigger: HTMLElement, files: string[]) {
+    let popover: HTMLElement | null = null;
+    let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearTimer = () => {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    };
+
+    const remove = () => {
+      clearTimer();
+      if (popover) { popover.remove(); popover = null; }
+    };
+
+    const show = () => {
+      clearTimer();
+      remove();
+
+      popover = document.body.createDiv("dashboard-popover");
+      popover.createDiv("dashboard-popover-title").textContent = `变更文件 (${files.length})`;
+
+      for (const filePath of files) {
+        const item = popover.createDiv("dashboard-popover-item");
+        item.textContent = filePath;
+      }
+
+      const rect = trigger.getBoundingClientRect();
+      popover.style.top = `${rect.bottom + 6}px`;
+      popover.style.left = `${Math.min(rect.left, window.innerWidth - 420)}px`;
+
+      popover.addEventListener("mouseenter", clearTimer);
+      popover.addEventListener("mouseleave", () => {
+        hideTimer = setTimeout(remove, 200);
+      });
+    };
+
+    trigger.addEventListener("mouseenter", show);
+    trigger.addEventListener("mouseleave", () => {
+      hideTimer = setTimeout(remove, 200);
+    });
+  }
+
+  private showPushConfirmModal(files: GitFileStatus[]) {
+    const gitService = this.gitService;
+    const settings = this.settings;
+    const view = this;
+
+    const STATUS_LABELS: Record<string, string> = {
+      " M": "已修改",
+      "??": "新增",
+      " A": "新增(已暂存)",
+      "AM": "新增(有冲突)",
+      " D": "已删除",
+      "M ": "已暂存",
+      "A ": "已暂存",
+      "D ": "已删除(已暂存)",
+      "MM": "有冲突",
+      "R ": "已重命名",
+    };
+
+    new (class extends Modal {
+      private checkboxes: { file: GitFileStatus; cb: HTMLInputElement }[] = [];
+      private allCb!: HTMLInputElement;
+
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("dashboard-push-confirm-modal");
+        contentEl.createEl("h3", { text: "确认推送" });
+        contentEl.createEl("p", {
+          text: `共 ${files.length} 个文件变更，勾选需要提交的文件：`,
+          cls: "dashboard-push-confirm-hint",
+        });
+
+        const commitMsg = contentEl.createDiv("dashboard-push-commit-row");
+        commitMsg.createEl("label", { text: "Commit 消息：" });
+        const msgInput = commitMsg.createEl("input", {
+          cls: "dashboard-push-commit-input",
+        }) as HTMLInputElement;
+        msgInput.value = view.buildCommitMessage();
+
+        const list = contentEl.createDiv("dashboard-push-file-list");
+
+        // Select all toggle
+        const selectAllRow = list.createDiv("dashboard-push-select-all");
+        const selectAllLabel = selectAllRow.createEl("label", { cls: "dashboard-push-check-label" });
+        this.allCb = selectAllLabel.createEl("input") as HTMLInputElement;
+        this.allCb.type = "checkbox";
+        this.allCb.checked = true;
+        selectAllLabel.createEl("span", { text: "全选 / 取消全选" });
+
+        this.allCb.addEventListener("change", () => {
+          for (const { cb } of this.checkboxes) {
+            cb.checked = this.allCb.checked;
+          }
+        });
+
+        // File list
+        for (const f of files) {
+          const row = list.createDiv("dashboard-push-file-row");
+          const checkLabel = row.createEl("label", { cls: "dashboard-push-check-label" });
+          const cb = checkLabel.createEl("input") as HTMLInputElement;
+          cb.type = "checkbox";
+          cb.checked = true;
+          this.checkboxes.push({ file: f, cb });
+
+          cb.addEventListener("change", () => {
+            const allChecked = this.checkboxes.every((c) => c.cb.checked);
+            this.allCb.checked = allChecked;
+          });
+
+          const statusEl = row.createEl("span", {
+            text: STATUS_LABELS[f.status] ?? f.status,
+            cls: `dashboard-push-status dashboard-push-status-${f.staged ? "staged" : "unstaged"}`,
+          });
+          row.createEl("span", { text: f.path, cls: "dashboard-push-file-path" });
+        }
+
+        // Actions
+        const actions = contentEl.createDiv("dashboard-modal-actions");
+        actions.style.cssText = "justify-content:flex-end;";
+        const cancelBtn = actions.createEl("button", { text: "取消" });
+        cancelBtn.addEventListener("click", () => this.close());
+
+        const confirmBtn = actions.createEl("button", { text: "确认推送", cls: "mod-cta" });
+        confirmBtn.addEventListener("click", async () => {
+          const selected = this.checkboxes
+            .filter((c) => c.cb.checked)
+            .map((c) => c.file.path);
+
+          if (selected.length === 0) {
+            new Notice("请至少选择一个文件");
+            return;
+          }
+
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = "推送中...";
+
+          try {
+            const staged = await gitService.stageFiles(selected);
+            await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
+            await gitService.push(
+              settings.gitRemoteName,
+              settings.gitBranchName,
+              settings.gitUsername || undefined,
+              settings.gitPassword || undefined
+            );
+            new Notice(`已推送 ${staged.length} 个文件`);
+            this.close();
+            await view.render();
+          } catch (e: any) {
+            new Notice(`Push 失败: ${e.message}`);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "确认推送";
+          }
+        });
+      }
+
+      onClose() {
+        this.contentEl.empty();
+      }
+    })(this.app).open();
+  }
+
+  private showRollbackConfirmModal(files: GitFileStatus[]) {
+    const gitService = this.gitService;
+    const view = this;
+
+    const STATUS_LABELS: Record<string, string> = {
+      " M": "已修改",
+      "??": "新增",
+      " D": "已删除",
+    };
+
+    new (class extends Modal {
+      private checkboxes: { file: GitFileStatus; cb: HTMLInputElement }[] = [];
+      private allCb!: HTMLInputElement;
+
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("dashboard-push-confirm-modal");
+        contentEl.createEl("h3", { text: "确认回滚" });
+        contentEl.createEl("p", {
+          text: `共 ${files.length} 个文件有变更，勾选需要回滚的文件：`,
+          cls: "dashboard-push-confirm-hint",
+        });
+        contentEl.createEl("p", {
+          text: "⚠ 回滚将丢弃所有未提交的变更，此操作不可撤销！",
+          cls: "dashboard-push-confirm-hint",
+        }).style.cssText = "color:var(--text-error);font-weight:600;";
+
+        const list = contentEl.createDiv("dashboard-push-file-list");
+
+        // Select all toggle
+        const selectAllRow = list.createDiv("dashboard-push-select-all");
+        const selectAllLabel = selectAllRow.createEl("label", { cls: "dashboard-push-check-label" });
+        this.allCb = selectAllLabel.createEl("input") as HTMLInputElement;
+        this.allCb.type = "checkbox";
+        this.allCb.checked = true;
+        selectAllLabel.createEl("span", { text: "全选 / 取消全选" });
+
+        this.allCb.addEventListener("change", () => {
+          for (const { cb } of this.checkboxes) {
+            cb.checked = this.allCb.checked;
+          }
+        });
+
+        // File list
+        for (const f of files) {
+          const row = list.createDiv("dashboard-push-file-row");
+          const checkLabel = row.createEl("label", { cls: "dashboard-push-check-label" });
+          const cb = checkLabel.createEl("input") as HTMLInputElement;
+          cb.type = "checkbox";
+          cb.checked = true;
+          this.checkboxes.push({ file: f, cb });
+
+          cb.addEventListener("change", () => {
+            const allChecked = this.checkboxes.every((c) => c.cb.checked);
+            this.allCb.checked = allChecked;
+          });
+
+          row.createEl("span", {
+            text: STATUS_LABELS[f.status] ?? f.status,
+            cls: "dashboard-push-status dashboard-push-status-unstaged",
+          });
+          row.createEl("span", { text: f.path, cls: "dashboard-push-file-path" });
+        }
+
+        // Actions
+        const actions = contentEl.createDiv("dashboard-modal-actions");
+        actions.style.cssText = "justify-content:flex-end;";
+        actions.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+
+        const confirmBtn = actions.createEl("button", { text: "确认回滚", cls: "mod-cta" });
+        confirmBtn.style.cssText = "background-color:var(--text-error);";
+        confirmBtn.addEventListener("click", async () => {
+          const selected = this.checkboxes
+            .filter((c) => c.cb.checked)
+            .map((c) => c.file.path);
+
+          if (selected.length === 0) {
+            new Notice("请至少选择一个文件");
+            return;
+          }
+
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = "回滚中...";
+
+          try {
+            const restored = await gitService.restoreFiles(selected);
+            new Notice(`已回滚 ${restored.length} 个文件`);
+            this.close();
+            await view.refreshGitModule();
+          } catch (e: any) {
+            new Notice(`回滚失败: ${e.message}`);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "确认回滚";
+          }
+        });
+      }
+
+      onClose() {
+        this.contentEl.empty();
+      }
+    })(this.app).open();
+  }
+
   // ─── Task Quick Add ──────────────────────────────────────────────────────
 
   private readonly TASK_SECTIONS = [
@@ -954,7 +1599,6 @@ export class DashboardView extends ItemView {
         btns.createEl("button", { text: "保存", cls: "mod-cta" }).addEventListener("click", async () => {
           await saveSettings(currentSettings);
           this.close();
-          view.render();
         });
       }
       onClose() { this.contentEl.empty(); }

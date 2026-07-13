@@ -1,6 +1,6 @@
 {
   "id": "yy-obsidian-dashboard",
-  "name": "yyObsidianDashboard",
+  "name": "dashboard",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
   "description": "A dashboard for LLM-powered wiki workflows: file stats, token usage, operation logs, LLM commands, heatmap, and plugin management.",

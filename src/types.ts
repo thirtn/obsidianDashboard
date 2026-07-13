@@ -115,6 +115,19 @@ export interface DashboardSettings {
   reportConfigs: ReportSettings;
   // Task quick add defaults
   taskDefaults: TaskDefaults;
+  // Dashboard display
+  dashboardTitle: string;
+  dashboardDesc: string;
+  // Git sync config
+  gitEnabled: boolean;
+  gitRemoteURL: string;
+  gitRemoteName: string;
+  gitBranchName: string;
+  gitUsername: string;
+  gitPassword: string;
+  gitAutoPushEnabled: boolean;
+  gitAutoPushInterval: number;
+  gitCommitTemplate: string;
 }
 
 export interface TaskDefaults {
@@ -146,4 +159,15 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
   lastConnectionTime: "",
   reportConfigs: defaultReportConfigs,
   taskDefaults: DEFAULT_TASK_DEFAULTS,
+  dashboardTitle: "Dashboard",
+  dashboardDesc: "禹思天下有溺者，由己溺之也；稷思天下有饥者，由己饥之也。",
+  gitEnabled: false,
+  gitRemoteURL: "",
+  gitRemoteName: "origin",
+  gitBranchName: "main",
+  gitUsername: "",
+  gitPassword: "",
+  gitAutoPushEnabled: false,
+  gitAutoPushInterval: 30,
+  gitCommitTemplate: "auto: {{date}} {{time}}",
 };

@@ -12,13 +12,13 @@ export default class LLMWikiDashboardPlugin extends Plugin {
       new DashboardView(leaf, this.settings, this.saveSettings.bind(this))
     );
 
-    this.addRibbonIcon("layout-dashboard", "yyObsidianDashboard", () => {
+    this.addRibbonIcon("layout-dashboard", "打开 Dashboard", () => {
       this.activateView();
     });
 
     this.addCommand({
       id: "open-dashboard",
-      name: "打开 yyObsidianDashboard",
+      name: "打开 Dashboard",
       callback: () => this.activateView(),
     });
 
@@ -86,7 +86,33 @@ class DashboardSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "yyObsidianDashboard 设置" });
+    containerEl.createEl("h2", { text: "Dashboard 设置" });
+
+    new Setting(containerEl)
+      .setName("标签页标题")
+      .setDesc("自定义 Dashboard 标签页显示的名称，可随时修改")
+      .addText((text) =>
+        text
+          .setPlaceholder("Dashboard")
+          .setValue(this.plugin.settings.dashboardTitle)
+          .onChange(async (value) => {
+            this.plugin.settings.dashboardTitle = value.trim() || "Dashboard";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("标签页描述")
+      .setDesc("显示在标签页标题下方的描述文字")
+      .addText((text) =>
+        text
+          .setPlaceholder("禹思天下有溺者，由己溺之也")
+          .setValue(this.plugin.settings.dashboardDesc)
+          .onChange(async (value) => {
+            this.plugin.settings.dashboardDesc = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
 
     new Setting(containerEl)
       .setName("API Base URL")
@@ -270,5 +296,128 @@ class DashboardSettingTab extends PluginSettingTab {
             })
         );
     }
+
+    // ─── Git Sync Config ──────────────────────────────────────────────────────
+
+    containerEl.createEl("h3", { text: "Git 同步 (Gitee)" });
+
+    new Setting(containerEl)
+      .setName("启用 Git 同步")
+      .setDesc("开启后可在 Dashboard 中进行 Push/Pull 操作")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.gitEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.gitEnabled = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("仓库地址")
+      .setDesc("Gitee 仓库 HTTPS 地址，如 https://gitee.com/username/repo.git")
+      .addText((text) =>
+        text
+          .setPlaceholder("https://gitee.com/username/repo.git")
+          .setValue(this.plugin.settings.gitRemoteURL)
+          .onChange(async (value) => {
+            this.plugin.settings.gitRemoteURL = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("远程名称")
+      .setDesc("Git remote 名称，默认 origin")
+      .addText((text) =>
+        text
+          .setPlaceholder("origin")
+          .setValue(this.plugin.settings.gitRemoteName)
+          .onChange(async (value) => {
+            this.plugin.settings.gitRemoteName = value.trim() || "origin";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("分支名")
+      .setDesc("默认分支名，如 main 或 master")
+      .addText((text) =>
+        text
+          .setPlaceholder("main")
+          .setValue(this.plugin.settings.gitBranchName)
+          .onChange(async (value) => {
+            this.plugin.settings.gitBranchName = value.trim() || "main";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Gitee 用户名")
+      .setDesc("Gitee 登录用户名或邮箱")
+      .addText((text) =>
+        text
+          .setPlaceholder("your-username")
+          .setValue(this.plugin.settings.gitUsername)
+          .onChange(async (value) => {
+            this.plugin.settings.gitUsername = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Gitee Token")
+      .setDesc("Gitee 私人令牌（https://gitee.com/profile/personal_access_tokens），存储于本地 data.json 中")
+      .addText((text) => {
+        text
+          .setPlaceholder("your-token")
+          .setValue(this.plugin.settings.gitPassword)
+          .onChange(async (value) => {
+            this.plugin.settings.gitPassword = value.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = "password";
+      });
+
+    new Setting(containerEl)
+      .setName("自动 Push")
+      .setDesc("开启后按设定的时间间隔自动 push")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.gitAutoPushEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.gitAutoPushEnabled = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("自动 Push 间隔（分钟）")
+      .setDesc("设为 0 表示每次 vault 变更后自动 push")
+      .addText((text) =>
+        text
+          .setPlaceholder("30")
+          .setValue(String(this.plugin.settings.gitAutoPushInterval))
+          .onChange(async (value) => {
+            const n = parseInt(value);
+            if (!isNaN(n) && n >= 0) {
+              this.plugin.settings.gitAutoPushInterval = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Commit 消息模板")
+      .setDesc("支持 {{date}} 和 {{time}} 占位符")
+      .addText((text) =>
+        text
+          .setPlaceholder("auto: {{date}} {{time}}")
+          .setValue(this.plugin.settings.gitCommitTemplate)
+          .onChange(async (value) => {
+            this.plugin.settings.gitCommitTemplate = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }

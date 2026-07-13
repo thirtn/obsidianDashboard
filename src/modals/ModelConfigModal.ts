@@ -24,8 +24,13 @@ export class ModelConfigModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("dashboard-modal");
-    contentEl.createEl("h2", { text: "模型配置" });
+    contentEl.createEl("h2", { text: "设置" });
 
+    contentEl.createEl("h3", { text: "标签设置" });
+    this.createTextField(contentEl, "标签页标题", "dashboardTitle", "text", "Dashboard");
+    this.createTextField(contentEl, "标签页描述", "dashboardDesc", "text", "禹思天下有溺者，由己溺之也");
+
+    contentEl.createEl("h3", { text: "模型配置" });
     this.createTextField(contentEl, "API Base URL", "apiBaseUrl", "text", "https://api.openai.com/v1");
     this.createTextField(contentEl, "API Key", "apiKey", "password", "sk-...");
     this.createModelField(contentEl);
@@ -68,12 +73,17 @@ export class ModelConfigModal extends Modal {
       }
     });
 
-    const saveBtn = contentEl.createEl("button", { text: "保存", cls: "mod-cta dashboard-save-btn" });
+    const saveBtn = contentEl.createEl("button", { text: "保存", cls: "mod-cta" });
     saveBtn.addEventListener("click", () => {
       this.onSave(this.settings);
       this.close();
       new Notice("模型配置已保存");
     });
+
+    const btnRow = contentEl.createDiv("dashboard-modal-actions");
+    btnRow.style.cssText = "justify-content:flex-end;";
+    btnRow.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+    btnRow.appendChild(saveBtn);
   }
 
   private createModelField(parent: HTMLElement) {
