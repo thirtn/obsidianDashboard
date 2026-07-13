@@ -113,7 +113,25 @@ export interface DashboardSettings {
   lastConnectionTime: string;
   // Report configs
   reportConfigs: ReportSettings;
+  // Task quick add defaults
+  taskDefaults: TaskDefaults;
 }
+
+export interface TaskDefaults {
+  urgent: string;
+  normal: string;
+  low: string;
+  ongoing: string;
+  ongoingPercent: string;
+}
+
+export const DEFAULT_TASK_DEFAULTS: TaskDefaults = {
+  urgent: "",
+  normal: "",
+  low: "",
+  ongoing: "",
+  ongoingPercent: "0",
+};
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
   apiBaseUrl: "https://api.openai.com/v1",
@@ -127,4 +145,5 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
   lastConnectionStatus: "untested",
   lastConnectionTime: "",
   reportConfigs: defaultReportConfigs,
+  taskDefaults: DEFAULT_TASK_DEFAULTS,
 };

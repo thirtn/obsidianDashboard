@@ -61,14 +61,30 @@ export class LogService {
     return { type, target, time, raw: line };
   }
 
-  async openLogFolder(): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath("wiki/log");
-    if (file instanceof TFile) {
-      const leaf = this.app.workspace.getLeaf(false);
-      await leaf.openFile(file);
-    } else {
-      // Open the folder in file explorer
-      (this.app as any).commands.executeCommandById("file-explorer:reveal-active-file");
+  async writeLog(type: LogType, target: string): Promise<void> {
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const timeStr = now.toISOString().slice(11, 19);
+    const line = `[${dateStr} ${timeStr}] ${type} ${target}`;
+
+    const dirPath = "wiki/log";
+    const filePath = `${dirPath}/${dateStr}.md`;
+
+    try {
+      const dir = this.app.vault.getAbstractFileByPath(dirPath);
+      if (!dir) {
+        await this.app.vault.createFolder(dirPath);
+      }
+
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (file) {
+        await this.app.vault.append(file as TFile, `\n${line}`);
+      } else {
+        await this.app.vault.create(filePath, line);
+      }
+    } catch {
+      // Silently ignore log write failures
     }
   }
+
 }

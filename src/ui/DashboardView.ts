@@ -1,5 +1,5 @@
 import { ItemView, WorkspaceLeaf, TFile, Notice, requestUrl, Modal } from "obsidian";
-import { DashboardSettings, FileStats, LogEntry, TokenUsage } from "../types";
+import { DashboardSettings, FileStats, TokenUsage } from "../types";
 import { FileService, RecentFile } from "../services/FileService";
 import { LogService } from "../services/LogService";
 import { LLMService } from "../services/LLMService";
@@ -118,13 +118,13 @@ export class DashboardView extends ItemView {
     container.addClass("dashboard-root");
 
     await this.renderHeader(container);
+    this.renderSearch(container);
     const scroll = container.createDiv("dashboard-scroll");
     await this.renderModule1(scroll);
     this.renderModule5(scroll);
-    await this.renderModule3(scroll);
     this.renderModule4(scroll);
     this.renderModule6(scroll);
-    this.renderFooter(scroll);
+    this.renderTaskQuickAdd(scroll);
   }
 
   // ─── Header ────────────────────────────────────────────────────────────────
@@ -161,6 +161,7 @@ export class DashboardView extends ItemView {
 
   private async renderHeaderTokenUsage(header: HTMLElement) {
     const bar = header.createDiv("dashboard-header-token");
+    bar.setAttribute("id", "dashboard-token-bar");
 
     // Local token stats
     let today = 0;
@@ -207,12 +208,117 @@ export class DashboardView extends ItemView {
     }
   }
 
+  // ─── Search ────────────────────────────────────────────────────────────────
+
+  private renderSearch(parent: HTMLElement) {
+    const searchWrap = parent.createDiv("dashboard-search-wrap");
+    const searchInput = searchWrap.createEl("input", {
+      cls: "dashboard-search-input",
+      placeholder: "搜索笔记...",
+    }) as HTMLInputElement;
+
+    const resultDropdown = searchWrap.createDiv("dashboard-search-dropdown");
+    resultDropdown.style.display = "none";
+
+    let blurTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const fuzzyMatch = (path: string, query: string): boolean => {
+      const lowerPath = path.toLowerCase();
+      const lowerQuery = query.toLowerCase();
+      let qi = 0;
+      for (let pi = 0; pi < lowerPath.length && qi < lowerQuery.length; pi++) {
+        if (lowerPath[pi] === lowerQuery[qi]) qi++;
+      }
+      return qi === lowerQuery.length;
+    };
+
+    const doSearch = () => {
+      const q = searchInput.value.trim();
+      if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+
+      if (!q) {
+        resultDropdown.empty();
+        resultDropdown.style.display = "none";
+        return;
+      }
+
+      const files = this.app.vault.getFiles()
+        .filter(f => f.extension === "md" && fuzzyMatch(f.path, q))
+        .slice(0, 8);
+
+      resultDropdown.empty();
+
+      if (files.length === 0) {
+        resultDropdown.style.display = "none";
+        return;
+      }
+
+      for (const file of files) {
+        const item = resultDropdown.createDiv("dashboard-search-item");
+        const nameEl = item.createEl("span", { text: file.basename, cls: "dashboard-search-item-name" });
+        item.createEl("span", { text: file.path, cls: "dashboard-search-item-path" });
+
+        item.addEventListener("mousedown", async (e) => {
+          e.preventDefault();
+          resultDropdown.style.display = "none";
+          searchInput.value = "";
+          await this.app.workspace.getLeaf(false).openFile(file);
+        });
+      }
+
+      resultDropdown.style.display = "block";
+    };
+
+    searchInput.addEventListener("input", doSearch);
+    searchInput.addEventListener("focus", doSearch);
+
+    searchInput.addEventListener("blur", () => {
+      blurTimer = setTimeout(() => {
+        resultDropdown.style.display = "none";
+      }, 200);
+    });
+
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        resultDropdown.style.display = "none";
+        searchInput.blur();
+      } else if (e.key === "Enter") {
+        const firstItem = resultDropdown.querySelector(".dashboard-search-item") as HTMLElement;
+        if (firstItem) firstItem.click();
+      }
+    });
+  }
+
   private loadLocalTokenStore(): Record<string, number> {
     try {
       const raw = localStorage.getItem("llm-wiki-dashboard-token-usage");
       return raw ? JSON.parse(raw) : {};
     } catch {
       return {};
+    }
+  }
+
+  private async refreshTokenBar() {
+    const bar = document.getElementById("dashboard-token-bar");
+    if (!bar) return;
+
+    let today = 0;
+    let thisMonth = 0;
+    try {
+      const store = this.loadLocalTokenStore();
+      const todayStr = this.fmtDate(new Date());
+      const monthPrefix = todayStr.slice(0, 7);
+      today = store[todayStr] ?? 0;
+      for (const [date, tokens] of Object.entries(store)) {
+        if (date.startsWith(monthPrefix)) thisMonth += tokens;
+      }
+    } catch { /* ignore */ }
+
+    // Find existing chips or create new ones
+    const chips = bar.querySelectorAll(".dashboard-token-chip-value");
+    if (chips.length >= 2) {
+      (chips[0] as HTMLElement).textContent = `${today.toLocaleString()} tokens`;
+      (chips[1] as HTMLElement).textContent = `${thisMonth.toLocaleString()} tokens`;
     }
   }
 
@@ -313,35 +419,6 @@ export class DashboardView extends ItemView {
 
   // ─── Module 3: Operation Log ───────────────────────────────────────────────
 
-  private async renderModule3(parent: HTMLElement) {
-    const mod = this.createModule(parent, "📋", "操作日志");
-    const body = mod.createDiv("dashboard-module-body");
-
-    let logs: LogEntry[];
-    try {
-      logs = await this.logService.getRecentLogs(5);
-    } catch {
-      body.createDiv({ text: "无法读取日志", cls: "dashboard-error" });
-      return;
-    }
-
-    if (logs.length === 0) {
-      body.createDiv({ text: "暂无日志记录", cls: "dashboard-empty" });
-    } else {
-      const list = body.createDiv("dashboard-log-list");
-      for (const entry of logs) {
-        const row = list.createDiv(`dashboard-log-row dashboard-log-${entry.type}`);
-        row.createEl("span", { text: "●", cls: "dashboard-log-dot" });
-        row.createEl("span", { text: entry.type, cls: "dashboard-log-type" });
-        row.createEl("span", { text: entry.target, cls: "dashboard-log-target" });
-        row.createEl("span", { text: this.formatLogTime(entry.time), cls: "dashboard-log-time" });
-      }
-    }
-
-    const openBtn = body.createEl("button", { text: "打开完整日志", cls: "dashboard-link-btn" });
-    openBtn.addEventListener("click", () => this.logService.openLogFolder());
-  }
-
   // ─── Module 4: LLM Command ────────────────────────────────────────────────
 
   private renderModule4(parent: HTMLElement) {
@@ -399,6 +476,12 @@ export class DashboardView extends ItemView {
         );
         resultEl.textContent = result;
         resultActions.style.display = "";
+
+        // Write operation log
+        const logType = commandSelect.value === "lint-wiki" ? "lint"
+          : commandSelect.value as "ingest" | "query";
+        this.logService.writeLog(logType, input.slice(0, 80));
+
         exportBtn.onclick = async () => {
           const filename = `outputs/${commandSelect.value}-${Date.now()}.md`;
           try {
@@ -416,6 +499,7 @@ export class DashboardView extends ItemView {
         this.executing = false;
         execBtn.disabled = false;
         execBtn.textContent = "▶ 执行";
+        this.refreshTokenBar();
       }
     });
   }
@@ -683,7 +767,15 @@ export class DashboardView extends ItemView {
   // ─── Module 6: Plugin Manager ─────────────────────────────────────────────
 
   private renderModule6(parent: HTMLElement) {
-    const mod = this.createModule(parent, "🔌", "插件管理");
+    const mod = parent.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.createEl("span", { text: "🔌 插件管理", cls: "dashboard-module-title" });
+
+    const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "Obsidian 插件设置" });
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => this.pluginService.openPluginSettings());
+
     const body = mod.createDiv("dashboard-module-body");
 
     const plugins = this.pluginService.getInstalledPlugins();
@@ -733,36 +825,255 @@ export class DashboardView extends ItemView {
         });
       }
     }
-
-    const openBtn = body.createEl("button", { text: "→ 打开 Obsidian 插件设置", cls: "dashboard-link-btn" });
-    openBtn.addEventListener("click", () => this.pluginService.openPluginSettings());
   }
 
-  // ─── Footer ───────────────────────────────────────────────────────────────
+  // ─── Task Quick Add ──────────────────────────────────────────────────────
 
-  private renderFooter(parent: HTMLElement) {
-    const footer = parent.createDiv("dashboard-footer");
+  private readonly TASK_SECTIONS = [
+    { key: "urgent", label: "🔴 紧急", section: "### 🔴 紧急/重要", placeholder: "紧急任务..." },
+    { key: "normal", label: "🟡 一般", section: "### 🟡 一般", placeholder: "一般任务..." },
+    { key: "low", label: "🟢 低优先级", section: "### 🟢 低优先级", placeholder: "低优先级任务..." },
+  ];
 
-    const shortcuts = footer.createDiv("dashboard-shortcuts");
-    for (const path of ["raw", "wiki", "outputs", "AGENTS.md"]) {
-      const btn = shortcuts.createEl("button", { text: path, cls: "dashboard-shortcut-btn" });
-      btn.addEventListener("click", async () => {
-        const f = this.app.vault.getAbstractFileByPath(path);
-        if (f instanceof TFile) {
-          await this.app.workspace.getLeaf(false).openFile(f);
-        } else {
-          new Notice(`未找到: ${path}`);
+  private renderTaskQuickAdd(parent: HTMLElement) {
+    const td = this.settings.taskDefaults;
+
+    const mod = parent.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.createEl("span", { text: "📝 快速添加任务", cls: "dashboard-module-title" });
+
+    const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "配置默认内容" });
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => this.openTaskDefaultsModal());
+
+    const body = mod.createDiv("dashboard-module-body");
+    body.style.cssText = "display:flex;flex-direction:column;gap:6px;";
+
+    // Three priority rows
+    for (const cfg of this.TASK_SECTIONS) {
+      const row = body.createDiv("dashboard-task-row");
+      row.createEl("span", { text: cfg.label, cls: "dashboard-task-label" });
+      const input = row.createEl("input", { cls: "dashboard-task-input", placeholder: cfg.placeholder }) as HTMLInputElement;
+      input.value = td[cfg.key as keyof typeof td] || "";
+      const addBtn = row.createEl("button", { text: "+", cls: "dashboard-task-add-btn", title: "添加到日报" });
+
+      const doAdd = async () => {
+        const val = input.value.trim();
+        if (!val) return;
+        addBtn.disabled = true;
+        addBtn.textContent = "...";
+        try {
+          await this.appendBulletToReport(cfg.section, val);
+          input.value = td[cfg.key as keyof typeof td] || "";
+        } catch (e: any) {
+          new Notice(`添加失败: ${e.message}`);
+        } finally {
+          addBtn.disabled = false;
+          addBtn.textContent = "+";
         }
+      };
+
+      addBtn.addEventListener("click", doAdd);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") doAdd();
       });
     }
 
-    const statusRow = footer.createDiv("dashboard-status-row");
-    const icon = this.settings.lastConnectionStatus === "ok" ? "✅"
-      : this.settings.lastConnectionStatus === "error" ? "❌" : "⚪";
-    const text = this.settings.lastConnectionStatus === "ok"
-      ? `正常（${this.settings.lastConnectionTime}）`
-      : this.settings.lastConnectionStatus === "error" ? "异常" : "未测试";
-    statusRow.createEl("span", { text: `模型状态: ${icon} ${text}`, cls: "dashboard-model-status" });
+    // Ongoing task row with percentage
+    const ongoingRow = body.createDiv("dashboard-task-row");
+    ongoingRow.createEl("span", { text: "🔄 持续任务", cls: "dashboard-task-label" });
+    const ongoingInput = ongoingRow.createEl("input", { cls: "dashboard-task-input", placeholder: "持续任务..." }) as HTMLInputElement;
+    ongoingInput.value = td.ongoing || "";
+    const pctInput = ongoingRow.createEl("input", {
+      cls: "dashboard-task-pct-input",
+      placeholder: "%",
+    }) as HTMLInputElement;
+    pctInput.value = td.ongoingPercent || "";
+    pctInput.style.cssText = "width:48px;flex-shrink:0;";
+    const ongoingBtn = ongoingRow.createEl("button", { text: "+", cls: "dashboard-task-add-btn", title: "添加到日报" });
+
+    const doAddOngoing = async () => {
+      const val = ongoingInput.value.trim();
+      if (!val) return;
+      const pct = pctInput.value.trim();
+      const text = pct ? `${val} (${pct}%)` : val;
+      ongoingBtn.disabled = true;
+      ongoingBtn.textContent = "...";
+      try {
+        await this.appendBulletToReport("### 🔄 持续任务", text);
+        ongoingInput.value = td.ongoing || "";
+        pctInput.value = td.ongoingPercent || "";
+      } catch (e: any) {
+        new Notice(`添加失败: ${e.message}`);
+      } finally {
+        ongoingBtn.disabled = false;
+        ongoingBtn.textContent = "+";
+      }
+    };
+
+    ongoingBtn.addEventListener("click", doAddOngoing);
+    ongoingInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doAddOngoing();
+    });
+    pctInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doAddOngoing();
+    });
+  }
+
+  private openTaskDefaultsModal() {
+    const td = this.settings.taskDefaults;
+    const saveSettings = this.onSettingsChange;
+    const currentSettings = this.settings;
+    const view = this;
+    const modal = new (class extends Modal {
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.addClass("dashboard-task-defaults-modal");
+        contentEl.createEl("h3", { text: "快速任务默认值" });
+
+        const addRow = (label: string, value: string, placeholder: string, onChange: (v: string) => void) => {
+          const row = contentEl.createDiv("dashboard-task-modal-row");
+          row.createEl("label", { text: label, cls: "dashboard-task-modal-label" });
+          const input = row.createEl("input", {
+            cls: "dashboard-task-modal-input",
+            placeholder,
+          }) as HTMLInputElement;
+          input.value = value;
+          input.addEventListener("input", () => onChange(input.value));
+        };
+
+        addRow("🔴 紧急", td.urgent, "默认紧急任务内容...", (v) => { td.urgent = v; });
+        addRow("🟡 一般", td.normal, "默认一般任务内容...", (v) => { td.normal = v; });
+        addRow("🟢 低优先级", td.low, "默认低优先级任务内容...", (v) => { td.low = v; });
+        addRow("🔄 持续任务", td.ongoing, "默认持续任务名称...", (v) => { td.ongoing = v; });
+        addRow("📊 持续任务进度 %", td.ongoingPercent, "默认进度百分比...", (v) => { td.ongoingPercent = v; });
+
+        const btns = contentEl.createDiv("dashboard-task-modal-btns");
+        btns.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+        btns.createEl("button", { text: "保存", cls: "mod-cta" }).addEventListener("click", async () => {
+          await saveSettings(currentSettings);
+          this.close();
+          view.render();
+        });
+      }
+      onClose() { this.contentEl.empty(); }
+    })(this.app);
+
+    modal.open();
+  }
+
+  private async appendBulletToReport(sectionMarker: string, text: string): Promise<void> {
+    const path = this.resolveReportPath("daily", new Date());
+    const file = this.app.vault.getAbstractFileByPath(path);
+
+    let content = "";
+    if (file instanceof TFile) {
+      content = await this.app.vault.read(file as TFile);
+    } else {
+      content = this.getDefaultReportTemplate();
+      const segs = path.split("/");
+      let acc = "";
+      for (let i = 0; i < segs.length - 1; i++) {
+        acc += (acc ? "/" : "") + segs[i];
+        if (!this.app.vault.getAbstractFileByPath(acc)) {
+          try { await this.app.vault.createFolder(acc); } catch { /* race */ }
+        }
+      }
+    }
+
+    const lines = content.split("\n");
+    const bullet = `- ${text}`;
+    let sectionIdx = -1;
+    let nextHeadingIdx = lines.length;
+
+    // Find the section marker
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === sectionMarker) {
+        sectionIdx = i;
+        // Find the next heading after this section
+        for (let j = i + 1; j < lines.length; j++) {
+          const trimmed = lines[j].trim();
+          if (trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
+            nextHeadingIdx = j;
+            break;
+          }
+        }
+        break;
+      }
+    }
+
+    if (sectionIdx === -1) {
+      // Section not found, append at end with the section header
+      if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+      lines.push(sectionMarker, "", bullet, "");
+    } else {
+      // Ensure there's always a blank line before the next heading
+      if (nextHeadingIdx > 0 && lines[nextHeadingIdx - 1] !== "") {
+        lines.splice(nextHeadingIdx, 0, "");
+      }
+      // Insert bullet after section header, before the blank+heading gap
+      // Find the last bullet line in this section
+      let insertAt = sectionIdx + 1;
+      while (insertAt < nextHeadingIdx && lines[insertAt].trim() === "") {
+        insertAt++;
+      }
+      // Insert after the existing content, before the blank line gap
+      while (insertAt < nextHeadingIdx && lines[insertAt].trim() !== "") {
+        insertAt++;
+      }
+      // If no trailing blank line, add one
+      if (insertAt < lines.length && lines[insertAt] !== "") {
+        lines.splice(insertAt, 0, "");
+      }
+      lines.splice(insertAt, 0, bullet);
+    }
+
+    const newContent = lines.join("\n");
+
+    if (file instanceof TFile) {
+      await this.app.vault.modify(file as TFile, newContent);
+    } else {
+      await this.app.vault.create(path, newContent);
+    }
+  }
+
+  private getDefaultReportTemplate(): string {
+    return `> **优先级图例**：<span style="color:#e53e3e">🔴 紧急/重要—必须当天完成</span> ｜ <span style="color:#d69e2e">🟡 一般—尽量完成</span> ｜ <span style="color:#38a169">🟢 低优先级—有空再做</span> ｜ <span style="color:#3182ce">🔵 备注/信息</span>
+
+## 今日任务
+
+### 🔴 紧急/重要
+
+-
+-
+
+### 🟡 一般
+
+-
+-
+
+### 🟢 低优先级
+
+-
+-
+
+## 今日完成
+
+-
+
+## 遇到的问题
+
+-
+
+## 明日计划
+
+-
+
+## 备注
+
+-
+`;
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -853,16 +1164,6 @@ export class DashboardView extends ItemView {
 
   private formatRelativeTime(mtime: number): string {
     const diff = Math.floor((Date.now() - mtime) / 60000);
-    if (diff < 1) return "刚刚";
-    if (diff < 60) return `${diff}分钟前`;
-    if (diff < 1440) return `${Math.floor(diff / 60)}小时前`;
-    return `${Math.floor(diff / 1440)}天前`;
-  }
-
-  private formatLogTime(time: string): string {
-    const d = new Date(time);
-    if (isNaN(d.getTime())) return time;
-    const diff = Math.floor((Date.now() - d.getTime()) / 60000);
     if (diff < 1) return "刚刚";
     if (diff < 60) return `${diff}分钟前`;
     if (diff < 1440) return `${Math.floor(diff / 60)}小时前`;

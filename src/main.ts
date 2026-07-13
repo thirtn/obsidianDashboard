@@ -55,6 +55,10 @@ export default class LLMWikiDashboardPlugin extends Plugin {
         }
       }
     }
+    // Deep-merge taskDefaults
+    if (saved?.taskDefaults) {
+      this.settings.taskDefaults = Object.assign({}, DEFAULT_SETTINGS.taskDefaults, saved.taskDefaults);
+    }
   }
 
   async saveSettings(settings?: DashboardSettings) {

@@ -32,6 +32,13 @@ var defaultReportConfigs = {
   quarterly: { enabled: false, confirmBeforeCreate: true, directory: "raw/quarterReport", filenameFormat: "YYYY/MM/YYYY-[Q]Q", templatePath: "raw/quarterReport/template" },
   yearly: { enabled: false, confirmBeforeCreate: true, directory: "raw/yearReport", filenameFormat: "YYYY/YYYY", templatePath: "raw/yearReport/template" }
 };
+var DEFAULT_TASK_DEFAULTS = {
+  urgent: "",
+  normal: "",
+  low: "",
+  ongoing: "",
+  ongoingPercent: "0"
+};
 var DEFAULT_SETTINGS = {
   apiBaseUrl: "https://api.openai.com/v1",
   apiKey: "",
@@ -43,7 +50,8 @@ var DEFAULT_SETTINGS = {
   trackedFolders: ["raw", "wiki", "outputs", "concepts", "entities"],
   lastConnectionStatus: "untested",
   lastConnectionTime: "",
-  reportConfigs: defaultReportConfigs
+  reportConfigs: defaultReportConfigs,
+  taskDefaults: DEFAULT_TASK_DEFAULTS
 };
 
 // src/ui/DashboardView.ts
@@ -278,13 +286,26 @@ var LogService = class {
     const target = targetMatch ? targetMatch[1].trim() : line.slice(0, 40);
     return { type, target, time, raw: line };
   }
-  async openLogFolder() {
-    const file = this.app.vault.getAbstractFileByPath("wiki/log");
-    if (file instanceof import_obsidian2.TFile) {
-      const leaf = this.app.workspace.getLeaf(false);
-      await leaf.openFile(file);
-    } else {
-      this.app.commands.executeCommandById("file-explorer:reveal-active-file");
+  async writeLog(type, target) {
+    const now = /* @__PURE__ */ new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const timeStr = now.toISOString().slice(11, 19);
+    const line = `[${dateStr} ${timeStr}] ${type} ${target}`;
+    const dirPath = "wiki/log";
+    const filePath = `${dirPath}/${dateStr}.md`;
+    try {
+      const dir = this.app.vault.getAbstractFileByPath(dirPath);
+      if (!dir) {
+        await this.app.vault.createFolder(dirPath);
+      }
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (file) {
+        await this.app.vault.append(file, `
+${line}`);
+      } else {
+        await this.app.vault.create(filePath, line);
+      }
+    } catch (e) {
     }
   }
 };
@@ -955,6 +976,12 @@ var DashboardView = class extends import_obsidian7.ItemView {
       quarterly: "\u5B63\u62A5",
       yearly: "\u5E74\u62A5"
     };
+    // ─── Task Quick Add ──────────────────────────────────────────────────────
+    this.TASK_SECTIONS = [
+      { key: "urgent", label: "\u{1F534} \u7D27\u6025", section: "### \u{1F534} \u7D27\u6025/\u91CD\u8981", placeholder: "\u7D27\u6025\u4EFB\u52A1..." },
+      { key: "normal", label: "\u{1F7E1} \u4E00\u822C", section: "### \u{1F7E1} \u4E00\u822C", placeholder: "\u4E00\u822C\u4EFB\u52A1..." },
+      { key: "low", label: "\u{1F7E2} \u4F4E\u4F18\u5148\u7EA7", section: "### \u{1F7E2} \u4F4E\u4F18\u5148\u7EA7", placeholder: "\u4F4E\u4F18\u5148\u7EA7\u4EFB\u52A1..." }
+    ];
     this.settings = settings;
     this.onSettingsChange = onSettingsChange;
     this.fileService = new FileService(this.app);
@@ -1036,13 +1063,13 @@ var DashboardView = class extends import_obsidian7.ItemView {
     container.empty();
     container.addClass("dashboard-root");
     await this.renderHeader(container);
+    this.renderSearch(container);
     const scroll = container.createDiv("dashboard-scroll");
     await this.renderModule1(scroll);
     this.renderModule5(scroll);
-    await this.renderModule3(scroll);
     this.renderModule4(scroll);
     this.renderModule6(scroll);
-    this.renderFooter(scroll);
+    this.renderTaskQuickAdd(scroll);
   }
   // ─── Header ────────────────────────────────────────────────────────────────
   async renderHeader(parent) {
@@ -1072,6 +1099,7 @@ var DashboardView = class extends import_obsidian7.ItemView {
   async renderHeaderTokenUsage(header) {
     var _a, _b;
     const bar = header.createDiv("dashboard-header-token");
+    bar.setAttribute("id", "dashboard-token-bar");
     let today = 0;
     let thisMonth = 0;
     try {
@@ -1113,12 +1141,104 @@ var DashboardView = class extends import_obsidian7.ItemView {
       }
     }
   }
+  // ─── Search ────────────────────────────────────────────────────────────────
+  renderSearch(parent) {
+    const searchWrap = parent.createDiv("dashboard-search-wrap");
+    const searchInput = searchWrap.createEl("input", {
+      cls: "dashboard-search-input",
+      placeholder: "\u641C\u7D22\u7B14\u8BB0..."
+    });
+    const resultDropdown = searchWrap.createDiv("dashboard-search-dropdown");
+    resultDropdown.style.display = "none";
+    let blurTimer = null;
+    const fuzzyMatch = (path, query) => {
+      const lowerPath = path.toLowerCase();
+      const lowerQuery = query.toLowerCase();
+      let qi = 0;
+      for (let pi = 0; pi < lowerPath.length && qi < lowerQuery.length; pi++) {
+        if (lowerPath[pi] === lowerQuery[qi])
+          qi++;
+      }
+      return qi === lowerQuery.length;
+    };
+    const doSearch = () => {
+      const q = searchInput.value.trim();
+      if (blurTimer) {
+        clearTimeout(blurTimer);
+        blurTimer = null;
+      }
+      if (!q) {
+        resultDropdown.empty();
+        resultDropdown.style.display = "none";
+        return;
+      }
+      const files = this.app.vault.getFiles().filter((f) => f.extension === "md" && fuzzyMatch(f.path, q)).slice(0, 8);
+      resultDropdown.empty();
+      if (files.length === 0) {
+        resultDropdown.style.display = "none";
+        return;
+      }
+      for (const file of files) {
+        const item = resultDropdown.createDiv("dashboard-search-item");
+        const nameEl = item.createEl("span", { text: file.basename, cls: "dashboard-search-item-name" });
+        item.createEl("span", { text: file.path, cls: "dashboard-search-item-path" });
+        item.addEventListener("mousedown", async (e) => {
+          e.preventDefault();
+          resultDropdown.style.display = "none";
+          searchInput.value = "";
+          await this.app.workspace.getLeaf(false).openFile(file);
+        });
+      }
+      resultDropdown.style.display = "block";
+    };
+    searchInput.addEventListener("input", doSearch);
+    searchInput.addEventListener("focus", doSearch);
+    searchInput.addEventListener("blur", () => {
+      blurTimer = setTimeout(() => {
+        resultDropdown.style.display = "none";
+      }, 200);
+    });
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        resultDropdown.style.display = "none";
+        searchInput.blur();
+      } else if (e.key === "Enter") {
+        const firstItem = resultDropdown.querySelector(".dashboard-search-item");
+        if (firstItem)
+          firstItem.click();
+      }
+    });
+  }
   loadLocalTokenStore() {
     try {
       const raw = localStorage.getItem("llm-wiki-dashboard-token-usage");
       return raw ? JSON.parse(raw) : {};
     } catch (e) {
       return {};
+    }
+  }
+  async refreshTokenBar() {
+    var _a;
+    const bar = document.getElementById("dashboard-token-bar");
+    if (!bar)
+      return;
+    let today = 0;
+    let thisMonth = 0;
+    try {
+      const store = this.loadLocalTokenStore();
+      const todayStr = this.fmtDate(/* @__PURE__ */ new Date());
+      const monthPrefix = todayStr.slice(0, 7);
+      today = (_a = store[todayStr]) != null ? _a : 0;
+      for (const [date, tokens] of Object.entries(store)) {
+        if (date.startsWith(monthPrefix))
+          thisMonth += tokens;
+      }
+    } catch (e) {
+    }
+    const chips = bar.querySelectorAll(".dashboard-token-chip-value");
+    if (chips.length >= 2) {
+      chips[0].textContent = `${today.toLocaleString()} tokens`;
+      chips[1].textContent = `${thisMonth.toLocaleString()} tokens`;
     }
   }
   // ─── Module 1: File Stats ───────────────────────────────────────────────────
@@ -1201,31 +1321,6 @@ var DashboardView = class extends import_obsidian7.ItemView {
     }
   }
   // ─── Module 3: Operation Log ───────────────────────────────────────────────
-  async renderModule3(parent) {
-    const mod = this.createModule(parent, "\u{1F4CB}", "\u64CD\u4F5C\u65E5\u5FD7");
-    const body = mod.createDiv("dashboard-module-body");
-    let logs;
-    try {
-      logs = await this.logService.getRecentLogs(5);
-    } catch (e) {
-      body.createDiv({ text: "\u65E0\u6CD5\u8BFB\u53D6\u65E5\u5FD7", cls: "dashboard-error" });
-      return;
-    }
-    if (logs.length === 0) {
-      body.createDiv({ text: "\u6682\u65E0\u65E5\u5FD7\u8BB0\u5F55", cls: "dashboard-empty" });
-    } else {
-      const list = body.createDiv("dashboard-log-list");
-      for (const entry of logs) {
-        const row = list.createDiv(`dashboard-log-row dashboard-log-${entry.type}`);
-        row.createEl("span", { text: "\u25CF", cls: "dashboard-log-dot" });
-        row.createEl("span", { text: entry.type, cls: "dashboard-log-type" });
-        row.createEl("span", { text: entry.target, cls: "dashboard-log-target" });
-        row.createEl("span", { text: this.formatLogTime(entry.time), cls: "dashboard-log-time" });
-      }
-    }
-    const openBtn = body.createEl("button", { text: "\u6253\u5F00\u5B8C\u6574\u65E5\u5FD7", cls: "dashboard-link-btn" });
-    openBtn.addEventListener("click", () => this.logService.openLogFolder());
-  }
   // ─── Module 4: LLM Command ────────────────────────────────────────────────
   renderModule4(parent) {
     const mod = this.createModule(parent, "\u26A1", "LLM \u6307\u4EE4\u6267\u884C");
@@ -1280,6 +1375,8 @@ var DashboardView = class extends import_obsidian7.ItemView {
         );
         resultEl.textContent = result;
         resultActions.style.display = "";
+        const logType = commandSelect.value === "lint-wiki" ? "lint" : commandSelect.value;
+        this.logService.writeLog(logType, input.slice(0, 80));
         exportBtn.onclick = async () => {
           const filename = `outputs/${commandSelect.value}-${Date.now()}.md`;
           try {
@@ -1297,6 +1394,7 @@ var DashboardView = class extends import_obsidian7.ItemView {
         this.executing = false;
         execBtn.disabled = false;
         execBtn.textContent = "\u25B6 \u6267\u884C";
+        this.refreshTokenBar();
       }
     });
   }
@@ -1523,7 +1621,13 @@ var DashboardView = class extends import_obsidian7.ItemView {
   }
   // ─── Module 6: Plugin Manager ─────────────────────────────────────────────
   renderModule6(parent) {
-    const mod = this.createModule(parent, "\u{1F50C}", "\u63D2\u4EF6\u7BA1\u7406");
+    const mod = parent.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.createEl("span", { text: "\u{1F50C} \u63D2\u4EF6\u7BA1\u7406", cls: "dashboard-module-title" });
+    const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "Obsidian \u63D2\u4EF6\u8BBE\u7F6E" });
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => this.pluginService.openPluginSettings());
     const body = mod.createDiv("dashboard-module-body");
     const plugins = this.pluginService.getInstalledPlugins();
     if (plugins.length === 0) {
@@ -1566,28 +1670,235 @@ var DashboardView = class extends import_obsidian7.ItemView {
         });
       }
     }
-    const openBtn = body.createEl("button", { text: "\u2192 \u6253\u5F00 Obsidian \u63D2\u4EF6\u8BBE\u7F6E", cls: "dashboard-link-btn" });
-    openBtn.addEventListener("click", () => this.pluginService.openPluginSettings());
   }
-  // ─── Footer ───────────────────────────────────────────────────────────────
-  renderFooter(parent) {
-    const footer = parent.createDiv("dashboard-footer");
-    const shortcuts = footer.createDiv("dashboard-shortcuts");
-    for (const path of ["raw", "wiki", "outputs", "AGENTS.md"]) {
-      const btn = shortcuts.createEl("button", { text: path, cls: "dashboard-shortcut-btn" });
-      btn.addEventListener("click", async () => {
-        const f = this.app.vault.getAbstractFileByPath(path);
-        if (f instanceof import_obsidian7.TFile) {
-          await this.app.workspace.getLeaf(false).openFile(f);
-        } else {
-          new import_obsidian7.Notice(`\u672A\u627E\u5230: ${path}`);
+  renderTaskQuickAdd(parent) {
+    const td = this.settings.taskDefaults;
+    const mod = parent.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.createEl("span", { text: "\u{1F4DD} \u5FEB\u901F\u6DFB\u52A0\u4EFB\u52A1", cls: "dashboard-module-title" });
+    const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "\u914D\u7F6E\u9ED8\u8BA4\u5185\u5BB9" });
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => this.openTaskDefaultsModal());
+    const body = mod.createDiv("dashboard-module-body");
+    body.style.cssText = "display:flex;flex-direction:column;gap:6px;";
+    for (const cfg of this.TASK_SECTIONS) {
+      const row = body.createDiv("dashboard-task-row");
+      row.createEl("span", { text: cfg.label, cls: "dashboard-task-label" });
+      const input = row.createEl("input", { cls: "dashboard-task-input", placeholder: cfg.placeholder });
+      input.value = td[cfg.key] || "";
+      const addBtn = row.createEl("button", { text: "+", cls: "dashboard-task-add-btn", title: "\u6DFB\u52A0\u5230\u65E5\u62A5" });
+      const doAdd = async () => {
+        const val = input.value.trim();
+        if (!val)
+          return;
+        addBtn.disabled = true;
+        addBtn.textContent = "...";
+        try {
+          await this.appendBulletToReport(cfg.section, val);
+          input.value = td[cfg.key] || "";
+        } catch (e) {
+          new import_obsidian7.Notice(`\u6DFB\u52A0\u5931\u8D25: ${e.message}`);
+        } finally {
+          addBtn.disabled = false;
+          addBtn.textContent = "+";
         }
+      };
+      addBtn.addEventListener("click", doAdd);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter")
+          doAdd();
       });
     }
-    const statusRow = footer.createDiv("dashboard-status-row");
-    const icon = this.settings.lastConnectionStatus === "ok" ? "\u2705" : this.settings.lastConnectionStatus === "error" ? "\u274C" : "\u26AA";
-    const text = this.settings.lastConnectionStatus === "ok" ? `\u6B63\u5E38\uFF08${this.settings.lastConnectionTime}\uFF09` : this.settings.lastConnectionStatus === "error" ? "\u5F02\u5E38" : "\u672A\u6D4B\u8BD5";
-    statusRow.createEl("span", { text: `\u6A21\u578B\u72B6\u6001: ${icon} ${text}`, cls: "dashboard-model-status" });
+    const ongoingRow = body.createDiv("dashboard-task-row");
+    ongoingRow.createEl("span", { text: "\u{1F504} \u6301\u7EED\u4EFB\u52A1", cls: "dashboard-task-label" });
+    const ongoingInput = ongoingRow.createEl("input", { cls: "dashboard-task-input", placeholder: "\u6301\u7EED\u4EFB\u52A1..." });
+    ongoingInput.value = td.ongoing || "";
+    const pctInput = ongoingRow.createEl("input", {
+      cls: "dashboard-task-pct-input",
+      placeholder: "%"
+    });
+    pctInput.value = td.ongoingPercent || "";
+    pctInput.style.cssText = "width:48px;flex-shrink:0;";
+    const ongoingBtn = ongoingRow.createEl("button", { text: "+", cls: "dashboard-task-add-btn", title: "\u6DFB\u52A0\u5230\u65E5\u62A5" });
+    const doAddOngoing = async () => {
+      const val = ongoingInput.value.trim();
+      if (!val)
+        return;
+      const pct = pctInput.value.trim();
+      const text = pct ? `${val} (${pct}%)` : val;
+      ongoingBtn.disabled = true;
+      ongoingBtn.textContent = "...";
+      try {
+        await this.appendBulletToReport("### \u{1F504} \u6301\u7EED\u4EFB\u52A1", text);
+        ongoingInput.value = td.ongoing || "";
+        pctInput.value = td.ongoingPercent || "";
+      } catch (e) {
+        new import_obsidian7.Notice(`\u6DFB\u52A0\u5931\u8D25: ${e.message}`);
+      } finally {
+        ongoingBtn.disabled = false;
+        ongoingBtn.textContent = "+";
+      }
+    };
+    ongoingBtn.addEventListener("click", doAddOngoing);
+    ongoingInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter")
+        doAddOngoing();
+    });
+    pctInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter")
+        doAddOngoing();
+    });
+  }
+  openTaskDefaultsModal() {
+    const td = this.settings.taskDefaults;
+    const saveSettings = this.onSettingsChange;
+    const currentSettings = this.settings;
+    const view = this;
+    const modal = new class extends import_obsidian7.Modal {
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.addClass("dashboard-task-defaults-modal");
+        contentEl.createEl("h3", { text: "\u5FEB\u901F\u4EFB\u52A1\u9ED8\u8BA4\u503C" });
+        const addRow = (label, value, placeholder, onChange) => {
+          const row = contentEl.createDiv("dashboard-task-modal-row");
+          row.createEl("label", { text: label, cls: "dashboard-task-modal-label" });
+          const input = row.createEl("input", {
+            cls: "dashboard-task-modal-input",
+            placeholder
+          });
+          input.value = value;
+          input.addEventListener("input", () => onChange(input.value));
+        };
+        addRow("\u{1F534} \u7D27\u6025", td.urgent, "\u9ED8\u8BA4\u7D27\u6025\u4EFB\u52A1\u5185\u5BB9...", (v) => {
+          td.urgent = v;
+        });
+        addRow("\u{1F7E1} \u4E00\u822C", td.normal, "\u9ED8\u8BA4\u4E00\u822C\u4EFB\u52A1\u5185\u5BB9...", (v) => {
+          td.normal = v;
+        });
+        addRow("\u{1F7E2} \u4F4E\u4F18\u5148\u7EA7", td.low, "\u9ED8\u8BA4\u4F4E\u4F18\u5148\u7EA7\u4EFB\u52A1\u5185\u5BB9...", (v) => {
+          td.low = v;
+        });
+        addRow("\u{1F504} \u6301\u7EED\u4EFB\u52A1", td.ongoing, "\u9ED8\u8BA4\u6301\u7EED\u4EFB\u52A1\u540D\u79F0...", (v) => {
+          td.ongoing = v;
+        });
+        addRow("\u{1F4CA} \u6301\u7EED\u4EFB\u52A1\u8FDB\u5EA6 %", td.ongoingPercent, "\u9ED8\u8BA4\u8FDB\u5EA6\u767E\u5206\u6BD4...", (v) => {
+          td.ongoingPercent = v;
+        });
+        const btns = contentEl.createDiv("dashboard-task-modal-btns");
+        btns.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+        btns.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" }).addEventListener("click", async () => {
+          await saveSettings(currentSettings);
+          this.close();
+          view.render();
+        });
+      }
+      onClose() {
+        this.contentEl.empty();
+      }
+    }(this.app);
+    modal.open();
+  }
+  async appendBulletToReport(sectionMarker, text) {
+    const path = this.resolveReportPath("daily", /* @__PURE__ */ new Date());
+    const file = this.app.vault.getAbstractFileByPath(path);
+    let content = "";
+    if (file instanceof import_obsidian7.TFile) {
+      content = await this.app.vault.read(file);
+    } else {
+      content = this.getDefaultReportTemplate();
+      const segs = path.split("/");
+      let acc = "";
+      for (let i = 0; i < segs.length - 1; i++) {
+        acc += (acc ? "/" : "") + segs[i];
+        if (!this.app.vault.getAbstractFileByPath(acc)) {
+          try {
+            await this.app.vault.createFolder(acc);
+          } catch (e) {
+          }
+        }
+      }
+    }
+    const lines = content.split("\n");
+    const bullet = `- ${text}`;
+    let sectionIdx = -1;
+    let nextHeadingIdx = lines.length;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === sectionMarker) {
+        sectionIdx = i;
+        for (let j = i + 1; j < lines.length; j++) {
+          const trimmed = lines[j].trim();
+          if (trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
+            nextHeadingIdx = j;
+            break;
+          }
+        }
+        break;
+      }
+    }
+    if (sectionIdx === -1) {
+      if (lines.length > 0 && lines[lines.length - 1] !== "")
+        lines.push("");
+      lines.push(sectionMarker, "", bullet, "");
+    } else {
+      if (nextHeadingIdx > 0 && lines[nextHeadingIdx - 1] !== "") {
+        lines.splice(nextHeadingIdx, 0, "");
+      }
+      let insertAt = sectionIdx + 1;
+      while (insertAt < nextHeadingIdx && lines[insertAt].trim() === "") {
+        insertAt++;
+      }
+      while (insertAt < nextHeadingIdx && lines[insertAt].trim() !== "") {
+        insertAt++;
+      }
+      if (insertAt < lines.length && lines[insertAt] !== "") {
+        lines.splice(insertAt, 0, "");
+      }
+      lines.splice(insertAt, 0, bullet);
+    }
+    const newContent = lines.join("\n");
+    if (file instanceof import_obsidian7.TFile) {
+      await this.app.vault.modify(file, newContent);
+    } else {
+      await this.app.vault.create(path, newContent);
+    }
+  }
+  getDefaultReportTemplate() {
+    return `> **\u4F18\u5148\u7EA7\u56FE\u4F8B**\uFF1A<span style="color:#e53e3e">\u{1F534} \u7D27\u6025/\u91CD\u8981\u2014\u5FC5\u987B\u5F53\u5929\u5B8C\u6210</span> \uFF5C <span style="color:#d69e2e">\u{1F7E1} \u4E00\u822C\u2014\u5C3D\u91CF\u5B8C\u6210</span> \uFF5C <span style="color:#38a169">\u{1F7E2} \u4F4E\u4F18\u5148\u7EA7\u2014\u6709\u7A7A\u518D\u505A</span> \uFF5C <span style="color:#3182ce">\u{1F535} \u5907\u6CE8/\u4FE1\u606F</span>
+
+## \u4ECA\u65E5\u4EFB\u52A1
+
+### \u{1F534} \u7D27\u6025/\u91CD\u8981
+
+-
+-
+
+### \u{1F7E1} \u4E00\u822C
+
+-
+-
+
+### \u{1F7E2} \u4F4E\u4F18\u5148\u7EA7
+
+-
+-
+
+## \u4ECA\u65E5\u5B8C\u6210
+
+-
+
+## \u9047\u5230\u7684\u95EE\u9898
+
+-
+
+## \u660E\u65E5\u8BA1\u5212
+
+-
+
+## \u5907\u6CE8
+
+-
+`;
   }
   // ─── Helpers ──────────────────────────────────────────────────────────────
   createModule(parent, icon, title) {
@@ -1678,19 +1989,6 @@ var DashboardView = class extends import_obsidian7.ItemView {
       return `${Math.floor(diff / 60)}\u5C0F\u65F6\u524D`;
     return `${Math.floor(diff / 1440)}\u5929\u524D`;
   }
-  formatLogTime(time) {
-    const d = new Date(time);
-    if (isNaN(d.getTime()))
-      return time;
-    const diff = Math.floor((Date.now() - d.getTime()) / 6e4);
-    if (diff < 1)
-      return "\u521A\u521A";
-    if (diff < 60)
-      return `${diff}\u5206\u949F\u524D`;
-    if (diff < 1440)
-      return `${Math.floor(diff / 60)}\u5C0F\u65F6\u524D`;
-    return `${Math.floor(diff / 1440)}\u5929\u524D`;
-  }
 };
 
 // src/main.ts
@@ -1735,6 +2033,9 @@ var LLMWikiDashboardPlugin = class extends import_obsidian8.Plugin {
           Object.assign(this.settings.reportConfigs[key], saved.reportConfigs[key]);
         }
       }
+    }
+    if (saved == null ? void 0 : saved.taskDefaults) {
+      this.settings.taskDefaults = Object.assign({}, DEFAULT_SETTINGS.taskDefaults, saved.taskDefaults);
     }
   }
   async saveSettings(settings) {
