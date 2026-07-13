@@ -1,6 +1,11 @@
 import { App, TFile, TFolder } from "obsidian";
 import { FileStats, FolderStat } from "../types";
 
+export interface RecentFile {
+  path: string;
+  mtime: number;
+}
+
 export class FileService {
   constructor(private app: App) {}
 
@@ -110,6 +115,16 @@ export class FileService {
       const leaf = this.app.workspace.getLeaf(false);
       await leaf.openFile(file);
     }
+  }
+
+  // ─── Recently modified files ──────────────────────────────────────────
+
+  getRecentlyModified(limit: number = 5): RecentFile[] {
+    const mdFiles = this.app.vault.getFiles().filter(f => f.extension === "md");
+    return mdFiles
+      .sort((a, b) => b.stat.mtime - a.stat.mtime)
+      .slice(0, limit)
+      .map(f => ({ path: f.path, mtime: f.stat.mtime }));
   }
 
   async toggleFolderInExplorer(name: string): Promise<void> {

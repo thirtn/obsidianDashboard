@@ -63,7 +63,21 @@
 .dashboard-refresh-time {
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
+}
+
+.dashboard-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-top: 4px;
+}
+
+.dashboard-version-label {
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--background-secondary);
+  padding: 1px 6px;
+  border-radius: 8px;
 }
 
 .dashboard-header-token {
@@ -280,6 +294,60 @@
   height: 100%;
   border-radius: 3px;
   transition: width 0.4s ease;
+}
+
+/* Recently modified files */
+.dashboard-recent-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.dashboard-recent-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.dashboard-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dashboard-recent-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.dashboard-recent-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.dashboard-recent-path {
+  color: var(--text-normal);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.dashboard-recent-path:hover {
+  color: var(--text-accent);
+}
+
+.dashboard-recent-time {
+  color: var(--text-faint);
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 /* ─── Module 2: Token Usage ─────────────────────────────────────────────── */
@@ -614,17 +682,29 @@
 
 .dashboard-heatmap-cell.future { background: none; }
 
+.dashboard-heatmap-legend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
 .dashboard-heatmap-legend {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 6px;
-  justify-content: flex-end;
 }
 
 .dashboard-heatmap-legend-label {
   font-size: 10px;
   color: var(--text-faint);
+}
+
+.dashboard-heatmap-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .legend-cell { width: 12px; height: 12px; }

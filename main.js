@@ -145,6 +145,11 @@ var FileService = class {
       await leaf.openFile(file);
     }
   }
+  // ─── Recently modified files ──────────────────────────────────────────
+  getRecentlyModified(limit = 5) {
+    const mdFiles = this.app.vault.getFiles().filter((f) => f.extension === "md");
+    return mdFiles.sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, limit).map((f) => ({ path: f.path, mtime: f.stat.mtime }));
+  }
   async toggleFolderInExplorer(name) {
     var _a, _b, _c, _d, _e, _f;
     let leaves = this.app.workspace.getLeavesOfType("file-explorer");
@@ -932,10 +937,17 @@ var ReportConfigModal = class extends import_obsidian6.Modal {
 // src/ui/DashboardView.ts
 var DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
 var DashboardView = class extends import_obsidian7.ItemView {
+  // 30 min periodic check
   constructor(leaf, settings, onSettingsChange) {
     super(leaf);
     this.executing = false;
     this.currentHeatmapYear = (/* @__PURE__ */ new Date()).getFullYear();
+    this.autoRefreshTimer = null;
+    this.lastRenderTime = 0;
+    this.visibilityTimer = null;
+    this.AUTO_REFRESH_COOLDOWN = 5 * 60 * 1e3;
+    // 5 min cooldown between auto-refreshes
+    this.VISIBILITY_CHECK_INTERVAL = 30 * 60 * 1e3;
     this.REPORT_NAMES = {
       daily: "\u65E5\u62A5",
       weekly: "\u5468\u62A5",
@@ -966,12 +978,60 @@ var DashboardView = class extends import_obsidian7.ItemView {
   }
   async onOpen() {
     this.heatmapService.startTracking();
+    this.onVaultChange = () => {
+      if (this.autoRefreshTimer)
+        clearTimeout(this.autoRefreshTimer);
+      this.autoRefreshTimer = setTimeout(() => {
+        const recentContainer = document.getElementById("dashboard-recent-container");
+        if (recentContainer)
+          this.renderRecentFiles(recentContainer);
+        const statsContainer = document.getElementById("dashboard-file-stats-container");
+        if (statsContainer)
+          this.renderFileStats(statsContainer);
+      }, 800);
+    };
+    this.app.vault.on("modify", this.onVaultChange);
+    this.app.vault.on("create", this.onVaultChange);
+    this.app.vault.on("delete", this.onVaultChange);
+    this.app.vault.on("rename", this.onVaultChange);
+    this.onActiveLeafChange = (leaf) => {
+      if (leaf.view !== this)
+        return;
+      const elapsed = Date.now() - this.lastRenderTime;
+      if (elapsed > this.AUTO_REFRESH_COOLDOWN) {
+        this.render();
+      }
+    };
+    this.app.workspace.on("active-leaf-change", this.onActiveLeafChange);
+    this.visibilityTimer = setInterval(() => {
+      var _a;
+      if (((_a = this.app.workspace.activeLeaf) == null ? void 0 : _a.view) === this) {
+        const elapsed = Date.now() - this.lastRenderTime;
+        if (elapsed > this.VISIBILITY_CHECK_INTERVAL) {
+          this.render();
+        }
+      }
+    }, this.VISIBILITY_CHECK_INTERVAL);
     await this.render();
   }
   async onClose() {
     this.heatmapService.stopTracking();
+    if (this.onVaultChange) {
+      this.app.vault.off("modify", this.onVaultChange);
+      this.app.vault.off("create", this.onVaultChange);
+      this.app.vault.off("delete", this.onVaultChange);
+      this.app.vault.off("rename", this.onVaultChange);
+    }
+    if (this.onActiveLeafChange) {
+      this.app.workspace.off("active-leaf-change", this.onActiveLeafChange);
+    }
+    if (this.autoRefreshTimer)
+      clearTimeout(this.autoRefreshTimer);
+    if (this.visibilityTimer)
+      clearInterval(this.visibilityTimer);
   }
   async render() {
+    this.lastRenderTime = Date.now();
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("dashboard-root");
@@ -1001,7 +1061,12 @@ var DashboardView = class extends import_obsidian7.ItemView {
         this.updateSettings(s);
       }).open();
     });
-    header.createDiv({ text: `\u6700\u540E\u5237\u65B0: ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`, cls: "dashboard-refresh-time" });
+    const metaRow = header.createDiv("dashboard-header-meta");
+    metaRow.createEl("span", { text: `\u6700\u540E\u5237\u65B0: ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`, cls: "dashboard-refresh-time" });
+    const obsVersion = this.getObsidianVersion();
+    if (obsVersion) {
+      metaRow.createEl("span", { text: `Obsidian v${obsVersion}`, cls: "dashboard-version-label" });
+    }
     await this.renderHeaderTokenUsage(header);
   }
   async renderHeaderTokenUsage(header) {
@@ -1062,7 +1127,8 @@ var DashboardView = class extends import_obsidian7.ItemView {
     const header = mod.createDiv("dashboard-module-header");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
     header.createEl("span", { text: "\u{1F4C1} \u6587\u4EF6\u7EDF\u8BA1", cls: "dashboard-module-title" });
-    const addBtn = header.createEl("button", { text: "+ \u589E\u52A0\u6587\u4EF6\u7EDF\u8BA1", cls: "dashboard-link-btn" });
+    const addBtn = header.createEl("button", { cls: "dashboard-icon-btn", title: "\u589E\u52A0\u6587\u4EF6\u7EDF\u8BA1" });
+    addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
     addBtn.addEventListener("click", () => {
       new FolderConfigModal(this.app, this.settings, this.fileService, async (s) => {
         await this.onSettingsChange(s);
@@ -1071,19 +1137,26 @@ var DashboardView = class extends import_obsidian7.ItemView {
       }).open();
     });
     const body = mod.createDiv("dashboard-module-body");
+    const statsContainer = body.createDiv({ attr: { id: "dashboard-file-stats-container" } });
+    await this.renderFileStats(statsContainer);
+    const recentContainer = body.createDiv({ cls: "dashboard-recent-section", attr: { id: "dashboard-recent-container" } });
+    this.renderRecentFiles(recentContainer);
+  }
+  async renderFileStats(container) {
+    container.empty();
     let stats;
     try {
       stats = await this.fileService.getStats(this.settings.trackedFolders);
     } catch (e) {
-      body.createDiv({ text: "\u52A0\u8F7D\u5931\u8D25", cls: "dashboard-error" });
+      container.createDiv({ text: "\u52A0\u8F7D\u5931\u8D25", cls: "dashboard-error" });
       return;
     }
-    const totalRow = body.createDiv("dashboard-stat-total");
+    const totalRow = container.createDiv("dashboard-stat-total");
     totalRow.createEl("span", { text: "Vault \u603B\u6587\u4EF6" });
     totalRow.createEl("strong", { text: String(stats.total) });
     if (stats.folderStats.length > 0) {
       const maxCount = Math.max(...stats.folderStats.map((f) => f.count), 1);
-      const list = body.createDiv("dashboard-folder-list");
+      const list = container.createDiv("dashboard-folder-list");
       for (const fs of stats.folderStats) {
         const row = list.createDiv("dashboard-folder-row");
         const nameEl = row.createEl("span", { text: fs.name, cls: "dashboard-folder-row-name", title: fs.name });
@@ -1096,11 +1169,11 @@ var DashboardView = class extends import_obsidian7.ItemView {
         row.createEl("span", { text: String(fs.count), cls: "dashboard-folder-row-count" });
       }
     }
-    const anomaly = body.createDiv("dashboard-anomaly-row");
+    const anomaly = container.createDiv("dashboard-anomaly-row");
     this.createBadge(anomaly, `\u26A0 \u5B64\u7ACB ${stats.orphanCount}`, stats.orphanCount > 0 ? "warn" : "ok", `\u5B64\u7ACB\u9875\u9762\uFF08${stats.orphanCount}\uFF09`, stats.orphanFiles);
     this.createBadge(anomaly, `\u26A0 \u65E0\u6765\u6E90 ${stats.nosourceCount}`, stats.nosourceCount > 0 ? "warn" : "ok", `\u65E0\u6765\u6E90\u9875\u9762\uFF08${stats.nosourceCount}\uFF09`, stats.nosourceFiles);
     this.createBadge(anomaly, `\u26A0 \u7A7A\u767D ${stats.emptyCount}`, stats.emptyCount > 0 ? "warn" : "ok", `\u7A7A\u767D\u9875\u9762\uFF08${stats.emptyCount}\uFF09`, stats.emptyFilesList);
-    const health = body.createDiv("dashboard-health");
+    const health = container.createDiv("dashboard-health");
     const healthLabel = health.createDiv("dashboard-health-label");
     healthLabel.createEl("span", { text: "\u5065\u5EB7\u5EA6" });
     healthLabel.createEl("strong", { text: `${stats.healthScore}\u5206\uFF08\u5B64\u7ACB\u536040% + \u65E0\u6765\u6E90\u536030% + \u7A7A\u767D\u536030%\uFF09` });
@@ -1108,6 +1181,24 @@ var DashboardView = class extends import_obsidian7.ItemView {
     const healthFill = healthBar.createDiv("dashboard-health-fill");
     healthFill.style.width = `${stats.healthScore}%`;
     healthFill.style.background = stats.healthScore >= 80 ? "var(--color-green)" : stats.healthScore >= 50 ? "var(--color-yellow)" : "var(--color-red)";
+  }
+  renderRecentFiles(container) {
+    container.empty();
+    const recentFiles = this.fileService.getRecentlyModified(5);
+    if (recentFiles.length === 0)
+      return;
+    container.createEl("span", { text: "\u6700\u8FD1\u4FEE\u6539", cls: "dashboard-recent-title" });
+    const list = container.createDiv("dashboard-recent-list");
+    for (const rf of recentFiles) {
+      const row = list.createDiv("dashboard-recent-row");
+      const nameEl = row.createEl("span", { text: rf.path, cls: "dashboard-recent-path", title: rf.path });
+      nameEl.addEventListener("click", () => {
+        const f = this.app.vault.getAbstractFileByPath(rf.path);
+        if (f instanceof import_obsidian7.TFile)
+          this.app.workspace.getLeaf(false).openFile(f);
+      });
+      row.createEl("span", { text: this.formatRelativeTime(rf.mtime), cls: "dashboard-recent-time" });
+    }
   }
   // ─── Module 3: Operation Log ───────────────────────────────────────────────
   async renderModule3(parent) {
@@ -1310,12 +1401,44 @@ var DashboardView = class extends import_obsidian7.ItemView {
         }
       }
     }
-    const legend = body.createDiv("dashboard-heatmap-legend");
+    const legendRow = body.createDiv("dashboard-heatmap-legend-row");
+    const legend = legendRow.createDiv("dashboard-heatmap-legend");
     legend.createEl("span", { text: "\u5C11", cls: "dashboard-heatmap-legend-label" });
     for (let i = 0; i <= 4; i++) {
       legend.createDiv({ cls: `dashboard-heatmap-cell level-${i} legend-cell` });
     }
     legend.createEl("span", { text: "\u591A", cls: "dashboard-heatmap-legend-label" });
+    const isCurrentYear = year === (/* @__PURE__ */ new Date()).getFullYear();
+    const statsRow = legendRow.createDiv("dashboard-heatmap-stats");
+    if (isCurrentYear) {
+      const now2 = /* @__PURE__ */ new Date();
+      const startOfWeek = new Date(now2);
+      startOfWeek.setDate(now2.getDate() - (now2.getDay() + 6) % 7);
+      const startOfMonth = new Date(now2.getFullYear(), now2.getMonth(), 1);
+      const startOfYear = new Date(year, 0, 1);
+      let weekCount = 0, monthCount = 0, yearCount = 0;
+      for (const [d, c] of Object.entries(data)) {
+        if (d >= this.fmtDate(startOfWeek))
+          weekCount += c;
+        if (d >= this.fmtDate(startOfMonth))
+          monthCount += c;
+        if (d >= this.fmtDate(startOfYear))
+          yearCount += c;
+      }
+      statsRow.createEl("span", { text: `\u672C\u5468 ${weekCount} \u6B21` });
+      statsRow.createEl("span", { text: `\u672C\u6708 ${monthCount} \u6B21` });
+      statsRow.createEl("span", { text: `\u4ECA\u5E74 ${yearCount} \u6B21` });
+    } else {
+      const startOfYear = new Date(year, 0, 1);
+      const endOfYear = new Date(year + 1, 0, 1);
+      const endOfYearStr = this.fmtDate(endOfYear);
+      let yearCount = 0;
+      for (const [d, c] of Object.entries(data)) {
+        if (d >= this.fmtDate(startOfYear) && d < endOfYearStr)
+          yearCount += c;
+      }
+      statsRow.createEl("span", { text: `${year} \u5E74 ${yearCount} \u6B21` });
+    }
   }
   resolveReportPath(type, date) {
     const cfg = this.settings.reportConfigs[type];
@@ -1523,6 +1646,37 @@ var DashboardView = class extends import_obsidian7.ItemView {
     badge.addEventListener("mouseleave", () => {
       hideTimer = setTimeout(remove, 200);
     });
+  }
+  getObsidianVersion() {
+    var _a, _b;
+    try {
+      const a = this.app;
+      if (typeof a.version === "string")
+        return a.version;
+      if (typeof a.appVersion === "string")
+        return a.appVersion;
+      const ua = navigator.userAgent;
+      const m = ua.match(/[Oo]bsidian\/([\d.]+)/);
+      if (m)
+        return m[1];
+      const w = window;
+      if ((_b = (_a = w.electronRemote) == null ? void 0 : _a.app) == null ? void 0 : _b.getVersion) {
+        return w.electronRemote.app.getVersion();
+      }
+      return "";
+    } catch (e) {
+      return "";
+    }
+  }
+  formatRelativeTime(mtime) {
+    const diff = Math.floor((Date.now() - mtime) / 6e4);
+    if (diff < 1)
+      return "\u521A\u521A";
+    if (diff < 60)
+      return `${diff}\u5206\u949F\u524D`;
+    if (diff < 1440)
+      return `${Math.floor(diff / 60)}\u5C0F\u65F6\u524D`;
+    return `${Math.floor(diff / 1440)}\u5929\u524D`;
   }
   formatLogTime(time) {
     const d = new Date(time);

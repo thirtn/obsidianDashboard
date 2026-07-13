@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, TFile, Notice, requestUrl, Modal } from "obsidian";
 import { DashboardSettings, FileStats, LogEntry, TokenUsage } from "../types";
-import { FileService } from "../services/FileService";
+import { FileService, RecentFile } from "../services/FileService";
 import { LogService } from "../services/LogService";
 import { LLMService } from "../services/LLMService";
 import { PluginManageService } from "../services/PluginManageService";
@@ -23,6 +23,13 @@ export class DashboardView extends ItemView {
 
   private executing = false;
   private currentHeatmapYear = new Date().getFullYear();
+  private autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private onVaultChange?: (file: any) => void;
+  private onActiveLeafChange?: (leaf: WorkspaceLeaf) => void;
+  private lastRenderTime = 0;
+  private visibilityTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly AUTO_REFRESH_COOLDOWN = 5 * 60 * 1000; // 5 min cooldown between auto-refreshes
+  private readonly VISIBILITY_CHECK_INTERVAL = 30 * 60 * 1000; // 30 min periodic check
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -50,14 +57,62 @@ export class DashboardView extends ItemView {
 
   async onOpen() {
     this.heatmapService.startTracking();
+
+    // Debounced auto-refresh recent files & file stats on vault changes
+    this.onVaultChange = () => {
+      if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
+      this.autoRefreshTimer = setTimeout(() => {
+        const recentContainer = document.getElementById("dashboard-recent-container");
+        if (recentContainer) this.renderRecentFiles(recentContainer);
+        const statsContainer = document.getElementById("dashboard-file-stats-container");
+        if (statsContainer) this.renderFileStats(statsContainer);
+      }, 800);
+    };
+    this.app.vault.on("modify", this.onVaultChange);
+    this.app.vault.on("create", this.onVaultChange);
+    this.app.vault.on("delete", this.onVaultChange);
+    this.app.vault.on("rename", this.onVaultChange);
+
+    // Auto-refresh when user switches back to this dashboard tab
+    this.onActiveLeafChange = (leaf: WorkspaceLeaf) => {
+      if (leaf.view !== this) return;
+      const elapsed = Date.now() - this.lastRenderTime;
+      if (elapsed > this.AUTO_REFRESH_COOLDOWN) {
+        this.render();
+      }
+    };
+    this.app.workspace.on("active-leaf-change", this.onActiveLeafChange);
+
+    // Periodic fallback: refresh if view is visible and data might be stale
+    this.visibilityTimer = setInterval(() => {
+      if (this.app.workspace.activeLeaf?.view === this) {
+        const elapsed = Date.now() - this.lastRenderTime;
+        if (elapsed > this.VISIBILITY_CHECK_INTERVAL) {
+          this.render();
+        }
+      }
+    }, this.VISIBILITY_CHECK_INTERVAL);
+
     await this.render();
   }
 
   async onClose() {
     this.heatmapService.stopTracking();
+    if (this.onVaultChange) {
+      this.app.vault.off("modify", this.onVaultChange);
+      this.app.vault.off("create", this.onVaultChange);
+      this.app.vault.off("delete", this.onVaultChange);
+      this.app.vault.off("rename", this.onVaultChange);
+    }
+    if (this.onActiveLeafChange) {
+      this.app.workspace.off("active-leaf-change", this.onActiveLeafChange);
+    }
+    if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
+    if (this.visibilityTimer) clearInterval(this.visibilityTimer);
   }
 
   async render() {
+    this.lastRenderTime = Date.now();
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("dashboard-root");
@@ -94,7 +149,12 @@ export class DashboardView extends ItemView {
       }).open();
     });
 
-    header.createDiv({ text: `最后刷新: ${new Date().toLocaleTimeString()}`, cls: "dashboard-refresh-time" });
+    const metaRow = header.createDiv("dashboard-header-meta");
+    metaRow.createEl("span", { text: `最后刷新: ${new Date().toLocaleTimeString()}`, cls: "dashboard-refresh-time" });
+    const obsVersion = this.getObsidianVersion();
+    if (obsVersion) {
+      metaRow.createEl("span", { text: `Obsidian v${obsVersion}`, cls: "dashboard-version-label" });
+    }
 
     await this.renderHeaderTokenUsage(header);
   }
@@ -163,7 +223,8 @@ export class DashboardView extends ItemView {
     const header = mod.createDiv("dashboard-module-header");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
     header.createEl("span", { text: "📁 文件统计", cls: "dashboard-module-title" });
-    const addBtn = header.createEl("button", { text: "+ 增加文件统计", cls: "dashboard-link-btn" });
+    const addBtn = header.createEl("button", { cls: "dashboard-icon-btn", title: "增加文件统计" });
+    addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
     addBtn.addEventListener("click", () => {
       new FolderConfigModal(this.app, this.settings, this.fileService, async (s) => {
         await this.onSettingsChange(s);
@@ -174,21 +235,33 @@ export class DashboardView extends ItemView {
 
     const body = mod.createDiv("dashboard-module-body");
 
+    // File stats (auto-refreshable portion)
+    const statsContainer = body.createDiv({ attr: { id: "dashboard-file-stats-container" } });
+    await this.renderFileStats(statsContainer);
+
+    // ── Recently modified files ────────────────────────────────────────
+    const recentContainer = body.createDiv({ cls: "dashboard-recent-section", attr: { id: "dashboard-recent-container" } });
+    this.renderRecentFiles(recentContainer);
+  }
+
+  private async renderFileStats(container: HTMLElement) {
+    container.empty();
+
     let stats: FileStats;
     try {
       stats = await this.fileService.getStats(this.settings.trackedFolders);
     } catch {
-      body.createDiv({ text: "加载失败", cls: "dashboard-error" });
+      container.createDiv({ text: "加载失败", cls: "dashboard-error" });
       return;
     }
 
-    const totalRow = body.createDiv("dashboard-stat-total");
+    const totalRow = container.createDiv("dashboard-stat-total");
     totalRow.createEl("span", { text: "Vault 总文件" });
     totalRow.createEl("strong", { text: String(stats.total) });
 
     if (stats.folderStats.length > 0) {
       const maxCount = Math.max(...stats.folderStats.map((f) => f.count), 1);
-      const list = body.createDiv("dashboard-folder-list");
+      const list = container.createDiv("dashboard-folder-list");
       for (const fs of stats.folderStats) {
         const row = list.createDiv("dashboard-folder-row");
         const nameEl = row.createEl("span", { text: fs.name, cls: "dashboard-folder-row-name", title: fs.name });
@@ -202,12 +275,12 @@ export class DashboardView extends ItemView {
       }
     }
 
-    const anomaly = body.createDiv("dashboard-anomaly-row");
+    const anomaly = container.createDiv("dashboard-anomaly-row");
     this.createBadge(anomaly, `⚠ 孤立 ${stats.orphanCount}`, stats.orphanCount > 0 ? "warn" : "ok", `孤立页面（${stats.orphanCount}）`, stats.orphanFiles);
     this.createBadge(anomaly, `⚠ 无来源 ${stats.nosourceCount}`, stats.nosourceCount > 0 ? "warn" : "ok", `无来源页面（${stats.nosourceCount}）`, stats.nosourceFiles);
     this.createBadge(anomaly, `⚠ 空白 ${stats.emptyCount}`, stats.emptyCount > 0 ? "warn" : "ok", `空白页面（${stats.emptyCount}）`, stats.emptyFilesList);
 
-    const health = body.createDiv("dashboard-health");
+    const health = container.createDiv("dashboard-health");
     const healthLabel = health.createDiv("dashboard-health-label");
     healthLabel.createEl("span", { text: "健康度" });
     healthLabel.createEl("strong", { text: `${stats.healthScore}分（孤立占40% + 无来源占30% + 空白占30%）` });
@@ -217,6 +290,25 @@ export class DashboardView extends ItemView {
     healthFill.style.background = stats.healthScore >= 80
       ? "var(--color-green)"
       : stats.healthScore >= 50 ? "var(--color-yellow)" : "var(--color-red)";
+
+  }
+
+  private renderRecentFiles(container: HTMLElement) {
+    container.empty();
+    const recentFiles = this.fileService.getRecentlyModified(5);
+    if (recentFiles.length === 0) return;
+
+    container.createEl("span", { text: "最近修改", cls: "dashboard-recent-title" });
+    const list = container.createDiv("dashboard-recent-list");
+    for (const rf of recentFiles) {
+      const row = list.createDiv("dashboard-recent-row");
+      const nameEl = row.createEl("span", { text: rf.path, cls: "dashboard-recent-path", title: rf.path });
+      nameEl.addEventListener("click", () => {
+        const f = this.app.vault.getAbstractFileByPath(rf.path);
+        if (f instanceof TFile) this.app.workspace.getLeaf(false).openFile(f);
+      });
+      row.createEl("span", { text: this.formatRelativeTime(rf.mtime), cls: "dashboard-recent-time" });
+    }
   }
 
   // ─── Module 3: Operation Log ───────────────────────────────────────────────
@@ -454,13 +546,43 @@ export class DashboardView extends ItemView {
       }
     }
 
-    // Legend
-    const legend = body.createDiv("dashboard-heatmap-legend");
+    // Legend + stats row
+    const legendRow = body.createDiv("dashboard-heatmap-legend-row");
+    const legend = legendRow.createDiv("dashboard-heatmap-legend");
     legend.createEl("span", { text: "少", cls: "dashboard-heatmap-legend-label" });
     for (let i = 0; i <= 4; i++) {
       legend.createDiv({ cls: `dashboard-heatmap-cell level-${i} legend-cell` });
     }
     legend.createEl("span", { text: "多", cls: "dashboard-heatmap-legend-label" });
+
+    // Summary stats
+    const isCurrentYear = year === new Date().getFullYear();
+    const statsRow = legendRow.createDiv("dashboard-heatmap-stats");
+    if (isCurrentYear) {
+      const now2 = new Date();
+      const startOfWeek = new Date(now2);
+      startOfWeek.setDate(now2.getDate() - ((now2.getDay() + 6) % 7));
+      const startOfMonth = new Date(now2.getFullYear(), now2.getMonth(), 1);
+      const startOfYear = new Date(year, 0, 1);
+      let weekCount = 0, monthCount = 0, yearCount = 0;
+      for (const [d, c] of Object.entries(data)) {
+        if (d >= this.fmtDate(startOfWeek)) weekCount += c;
+        if (d >= this.fmtDate(startOfMonth)) monthCount += c;
+        if (d >= this.fmtDate(startOfYear)) yearCount += c;
+      }
+      statsRow.createEl("span", { text: `本周 ${weekCount} 次` });
+      statsRow.createEl("span", { text: `本月 ${monthCount} 次` });
+      statsRow.createEl("span", { text: `今年 ${yearCount} 次` });
+    } else {
+      const startOfYear = new Date(year, 0, 1);
+      const endOfYear = new Date(year + 1, 0, 1);
+      const endOfYearStr = this.fmtDate(endOfYear);
+      let yearCount = 0;
+      for (const [d, c] of Object.entries(data)) {
+        if (d >= this.fmtDate(startOfYear) && d < endOfYearStr) yearCount += c;
+      }
+      statsRow.createEl("span", { text: `${year} 年 ${yearCount} 次` });
+    }
   }
 
   private resolveReportPath(type: "daily"|"weekly"|"monthly"|"quarterly"|"yearly", date: Date): string {
@@ -704,6 +826,37 @@ export class DashboardView extends ItemView {
     badge.addEventListener("mouseleave", () => {
       hideTimer = setTimeout(remove, 200);
     });
+  }
+
+  private getObsidianVersion(): string {
+    try {
+      const a = this.app as any;
+      if (typeof a.version === 'string') return a.version;
+      if (typeof a.appVersion === 'string') return a.appVersion;
+
+      // Try to parse from userAgent: "obsidian/1.5.12"
+      const ua = navigator.userAgent;
+      const m = ua.match(/[Oo]bsidian\/([\d.]+)/);
+      if (m) return m[1];
+
+      // Try Electron remote
+      const w = window as any;
+      if (w.electronRemote?.app?.getVersion) {
+        return w.electronRemote.app.getVersion();
+      }
+
+      return "";
+    } catch {
+      return "";
+    }
+  }
+
+  private formatRelativeTime(mtime: number): string {
+    const diff = Math.floor((Date.now() - mtime) / 60000);
+    if (diff < 1) return "刚刚";
+    if (diff < 60) return `${diff}分钟前`;
+    if (diff < 1440) return `${Math.floor(diff / 60)}小时前`;
+    return `${Math.floor(diff / 1440)}天前`;
   }
 
   private formatLogTime(time: string): string {
