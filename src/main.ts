@@ -430,6 +430,7 @@ class DashboardSettingTab extends PluginSettingTab {
           })
       );
     this.addExampleHint(setting11, "auto: {{date}} {{time}}");
+    this.addCommitPreview(setting11);
   }
 
   private addExampleHint(setting: Setting, example: string) {
@@ -441,5 +442,24 @@ class DashboardSettingTab extends PluginSettingTab {
       input.dispatchEvent(new Event("input"));
     });
     setting.controlEl.appendChild(hint);
+  }
+
+  private addCommitPreview(setting: Setting) {
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    if (!input) return;
+    const preview = createSpan({ cls: "dashboard-format-preview" });
+    const updatePreview = () => {
+      const now = new Date();
+      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      const time = now.toTimeString().slice(0, 8);
+      const val = input.value || input.placeholder;
+      const example = val
+        .replace(/\{\{date\}\}/g, date)
+        .replace(/\{\{time\}\}/g, time);
+      preview.textContent = `示例: ${example}`;
+    };
+    updatePreview();
+    input.addEventListener("input", updatePreview);
+    setting.descEl.appendChild(preview);
   }
 }

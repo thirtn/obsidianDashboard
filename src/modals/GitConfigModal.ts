@@ -200,8 +200,6 @@ export class GitConfigModal extends Modal {
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
-    input.addEventListener("input", () => onChange(input.value));
-
     const preview = row.createDiv("dashboard-format-preview");
     const updatePreview = () => {
       const now = new Date();
@@ -212,6 +210,10 @@ export class GitConfigModal extends Modal {
         .replace(/\{\{time\}\}/g, time);
       preview.textContent = `示例: ${example}`;
     };
+    input.addEventListener("input", () => {
+      onChange(input.value);
+      updatePreview();
+    });
     updatePreview();
     this.addExampleHint(wrap, input, placeholder);
   }

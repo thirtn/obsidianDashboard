@@ -1555,7 +1555,6 @@ var GitConfigModal = class extends import_obsidian8.Modal {
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
-    input.addEventListener("input", () => onChange(input.value));
     const preview = row.createDiv("dashboard-format-preview");
     const updatePreview = () => {
       const now = /* @__PURE__ */ new Date();
@@ -1564,6 +1563,10 @@ var GitConfigModal = class extends import_obsidian8.Modal {
       const example = (input.value || placeholder).replace(/\{\{date\}\}/g, date).replace(/\{\{time\}\}/g, time);
       preview.textContent = `\u793A\u4F8B: ${example}`;
     };
+    input.addEventListener("input", () => {
+      onChange(input.value);
+      updatePreview();
+    });
     updatePreview();
     this.addExampleHint(wrap, input, placeholder);
   }
@@ -3638,6 +3641,7 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
       })
     );
     this.addExampleHint(setting11, "auto: {{date}} {{time}}");
+    this.addCommitPreview(setting11);
   }
   addExampleHint(setting, example) {
     const input = setting.controlEl.querySelector("input");
@@ -3649,5 +3653,22 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
       input.dispatchEvent(new Event("input"));
     });
     setting.controlEl.appendChild(hint);
+  }
+  addCommitPreview(setting) {
+    const input = setting.controlEl.querySelector("input");
+    if (!input)
+      return;
+    const preview = createSpan({ cls: "dashboard-format-preview" });
+    const updatePreview = () => {
+      const now = /* @__PURE__ */ new Date();
+      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      const time = now.toTimeString().slice(0, 8);
+      const val = input.value || input.placeholder;
+      const example = val.replace(/\{\{date\}\}/g, date).replace(/\{\{time\}\}/g, time);
+      preview.textContent = `\u793A\u4F8B: ${example}`;
+    };
+    updatePreview();
+    input.addEventListener("input", updatePreview);
+    setting.descEl.appendChild(preview);
   }
 };
