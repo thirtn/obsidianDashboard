@@ -30,6 +30,7 @@ export class DashboardView extends ItemView {
   private currentHeatmapYear = new Date().getFullYear();
   private autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private autoPushTimer: ReturnType<typeof setInterval> | null = null;
+  private gitRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private onVaultChange?: (file: any) => void;
   private onActiveLeafChange?: (leaf: WorkspaceLeaf) => void;
   private lastRenderTime = 0;
@@ -120,6 +121,11 @@ export class DashboardView extends ItemView {
         if (statsContainer) this.renderFileStats(statsContainer);
       }, 800);
 
+      // Refresh git status on vault change
+      if (this.settings.gitEnabled) {
+        this.refreshGitModule();
+      }
+
       // Auto-push on vault change (when interval === 0)
       if (
         this.settings.gitEnabled &&
@@ -139,6 +145,12 @@ export class DashboardView extends ItemView {
 
     // Auto-push setup
     this.setupAutoPush();
+
+    // Auto-refresh git status every 5 seconds
+    if (this.gitRefreshTimer) clearInterval(this.gitRefreshTimer);
+    this.gitRefreshTimer = setInterval(() => {
+      this.refreshGitModule();
+    }, 5000);
 
     // Auto-refresh when user switches back to this dashboard tab
     this.onActiveLeafChange = (leaf: WorkspaceLeaf) => {
@@ -176,6 +188,7 @@ export class DashboardView extends ItemView {
     }
     if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
     if (this.autoPushTimer) clearInterval(this.autoPushTimer);
+    if (this.gitRefreshTimer) clearInterval(this.gitRefreshTimer);
     if (this.visibilityTimer) clearInterval(this.visibilityTimer);
   }
 
@@ -1146,13 +1159,6 @@ export class DashboardView extends ItemView {
       }
       this.showRollbackConfirmModal(files);
     });
-
-    // Refresh status button
-    const refreshBtn = actions.createEl("button", {
-      text: "刷新状态",
-      cls: "dashboard-git-btn",
-    });
-    refreshBtn.addEventListener("click", () => this.refreshGitModule());
 
     // Auto-push quick toggle
     const autoRow = body.createDiv("dashboard-git-auto-row");

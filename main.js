@@ -1490,6 +1490,7 @@ var DashboardView = class extends import_obsidian9.ItemView {
     this.currentHeatmapYear = (/* @__PURE__ */ new Date()).getFullYear();
     this.autoRefreshTimer = null;
     this.autoPushTimer = null;
+    this.gitRefreshTimer = null;
     this.lastRenderTime = 0;
     this.visibilityTimer = null;
     this.AUTO_REFRESH_COOLDOWN = 5 * 60 * 1e3;
@@ -1580,6 +1581,9 @@ var DashboardView = class extends import_obsidian9.ItemView {
         if (statsContainer)
           this.renderFileStats(statsContainer);
       }, 800);
+      if (this.settings.gitEnabled) {
+        this.refreshGitModule();
+      }
       if (this.settings.gitEnabled && this.settings.gitAutoPushEnabled && this.settings.gitAutoPushInterval === 0) {
         if (this.autoPushDebounceTimer)
           clearTimeout(this.autoPushDebounceTimer);
@@ -1593,6 +1597,11 @@ var DashboardView = class extends import_obsidian9.ItemView {
     this.app.vault.on("delete", this.onVaultChange);
     this.app.vault.on("rename", this.onVaultChange);
     this.setupAutoPush();
+    if (this.gitRefreshTimer)
+      clearInterval(this.gitRefreshTimer);
+    this.gitRefreshTimer = setInterval(() => {
+      this.refreshGitModule();
+    }, 5e3);
     this.onActiveLeafChange = (leaf) => {
       if (leaf.view !== this)
         return;
@@ -1628,6 +1637,8 @@ var DashboardView = class extends import_obsidian9.ItemView {
       clearTimeout(this.autoRefreshTimer);
     if (this.autoPushTimer)
       clearInterval(this.autoPushTimer);
+    if (this.gitRefreshTimer)
+      clearInterval(this.gitRefreshTimer);
     if (this.visibilityTimer)
       clearInterval(this.visibilityTimer);
   }
@@ -2473,11 +2484,6 @@ var DashboardView = class extends import_obsidian9.ItemView {
       }
       this.showRollbackConfirmModal(files);
     });
-    const refreshBtn = actions.createEl("button", {
-      text: "\u5237\u65B0\u72B6\u6001",
-      cls: "dashboard-git-btn"
-    });
-    refreshBtn.addEventListener("click", () => this.refreshGitModule());
     const autoRow = body.createDiv("dashboard-git-auto-row");
     const autoLabel = autoRow.createEl("label", { cls: "dashboard-git-auto-label" });
     autoLabel.createEl("span", { text: "\u81EA\u52A8 Push" });
