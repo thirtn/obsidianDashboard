@@ -909,6 +909,109 @@ var GitService = class {
   }
 };
 
+// src/services/RemotelySaveService.ts
+var RemotelySaveService = class {
+  constructor() {
+    this.dbName = "remotelysavedb";
+    this.storeName = "syncplanshistory";
+  }
+  async openDB() {
+    return new Promise((resolve, reject) => {
+      try {
+        const req = indexedDB.open(this.dbName);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(new Error("\u65E0\u6CD5\u6253\u5F00 Remotely Save \u6570\u636E\u5E93"));
+        req.onblocked = () => {
+          console.log("[yyDashboard] RS DB blocked \u2014 closing and retrying");
+          if (req.result)
+            req.result.close();
+          reject(new Error("\u6570\u636E\u5E93\u88AB\u963B\u585E\uFF0C\u8BF7\u91CD\u8BD5"));
+        };
+      } catch (e) {
+        reject(new Error("indexedDB not available: " + e.message));
+      }
+    });
+  }
+  async getSyncHistory(limit = 10) {
+    let db = null;
+    try {
+      db = await this.openDB();
+    } catch (e) {
+      console.log("[yyDashboard] Remotely Save DB not available:", e.message);
+      return [];
+    }
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(this.storeName, "readonly");
+        const store = tx.objectStore(this.storeName);
+        const sessions = [];
+        store.openCursor(null, "prev").onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            const record = cursor.value;
+            try {
+              const plan = typeof record.syncPlan === "string" ? JSON.parse(record.syncPlan) : record.syncPlan;
+              const session = this.parseSyncPlan(record, plan);
+              if (session && session.totalCount > 0) {
+                sessions.push(session);
+              }
+            } catch (e) {
+            }
+            if (sessions.length >= limit) {
+              resolve(sessions);
+              return;
+            }
+            cursor.continue();
+          } else {
+            resolve(sessions);
+          }
+        };
+        tx.onerror = () => resolve(sessions);
+      } catch (e) {
+        console.log("[yyDashboard] Error reading sync history:", e.message);
+        resolve([]);
+      }
+    });
+  }
+  parseSyncPlan(record, plan) {
+    if (!plan || typeof plan !== "object")
+      return null;
+    const uploads = [];
+    const downloads = [];
+    const deletions = [];
+    for (const [key, info] of Object.entries(plan)) {
+      if (!info || typeof info !== "object")
+        continue;
+      const decision = info.decision || "";
+      const changed = info.change === true;
+      if (!changed)
+        continue;
+      if (decision.startsWith("upload")) {
+        uploads.push(key);
+      } else if (decision.startsWith("download")) {
+        downloads.push(key);
+      } else if (decision.startsWith("delete") || decision.startsWith("remove")) {
+        deletions.push(key);
+      } else if (decision === "keepRemote" || decision === "overwrite") {
+        downloads.push(key);
+      } else if (decision === "keepLocal" || decision === "overwriteRemote") {
+        uploads.push(key);
+      } else if (changed && key) {
+        uploads.push(key);
+      }
+    }
+    return {
+      ts: record.ts || 0,
+      tsFmt: record.tsFmt || "",
+      remoteType: record.remoteType || "",
+      uploads,
+      downloads,
+      deletions,
+      totalCount: uploads.length + downloads.length + deletions.length
+    };
+  }
+};
+
 // src/modals/ModelConfigModal.ts
 var import_obsidian5 = require("obsidian");
 var ModelConfigModal = class extends import_obsidian5.Modal {
@@ -1518,6 +1621,7 @@ var DashboardView = class extends import_obsidian9.ItemView {
     this.pluginService = new PluginManageService(this.app);
     this.heatmapService = new HeatmapService(this.app);
     this.gitService = new GitService(this.app);
+    this.remotelySaveService = new RemotelySaveService();
   }
   getViewType() {
     return DASHBOARD_VIEW_TYPE;
@@ -1666,6 +1770,7 @@ var DashboardView = class extends import_obsidian9.ItemView {
       this.renderModule5(scroll);
       this.renderModule4(scroll);
       await this.renderGitModule(scroll);
+      await this.renderRemotelySaveModule(scroll);
       this.renderTaskQuickAdd(scroll);
       this.renderModule6(scroll);
       container.replaceChildren(offscreen);
@@ -2518,6 +2623,113 @@ var DashboardView = class extends import_obsidian9.ItemView {
           cls: "dashboard-git-commit-date"
         });
       }
+    }
+  }
+  isRemotelySaveEnabled() {
+    var _a, _b;
+    const plugins = this.app.plugins;
+    if (!plugins)
+      return false;
+    const manifests = (_a = plugins.manifests) != null ? _a : {};
+    if (!manifests["remotely-save"])
+      return false;
+    const enabledSet = (_b = plugins.enabledPlugins) != null ? _b : {};
+    if (enabledSet instanceof Set)
+      return enabledSet.has("remotely-save");
+    return !!enabledSet["remotely-save"];
+  }
+  async renderRemotelySaveModule(parent) {
+    if (!this.isRemotelySaveEnabled())
+      return;
+    const mod = parent.createDiv("dashboard-module");
+    mod.id = "dashboard-remotely-save-module";
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    const titleWrap = header.createDiv();
+    titleWrap.createEl("span", { text: "\u2601\uFE0F OneDrive \u540C\u6B65", cls: "dashboard-module-title" });
+    const body = mod.createDiv("dashboard-module-body dashboard-sync-body");
+    const sessions = await this.remotelySaveService.getSyncHistory(7);
+    if (sessions.length === 0) {
+      body.createDiv({
+        text: "\u6682\u65E0 Remotely Save \u540C\u6B65\u8BB0\u5F55",
+        cls: "dashboard-git-mobile-hint"
+      });
+      return;
+    }
+    header.createEl("span", {
+      text: `${sessions.length} \u6B21\u540C\u6B65`,
+      cls: "dashboard-module-badge"
+    });
+    const sessionList = body.createDiv("dashboard-sync-session-list");
+    for (const session of sessions) {
+      const sessionBlock = sessionList.createDiv("dashboard-sync-session");
+      const sessionHeader = sessionBlock.createDiv("dashboard-sync-session-header");
+      const date = new Date(session.ts);
+      const dateStr = date.toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+      sessionHeader.createEl("span", {
+        text: `${dateStr}`,
+        cls: "dashboard-sync-time"
+      });
+      const badges = sessionHeader.createDiv("dashboard-sync-badges");
+      if (session.uploads.length > 0) {
+        badges.createEl("span", { text: `\u2191 ${session.uploads.length}`, cls: "dashboard-sync-badge dashboard-sync-badge-upload" });
+      }
+      if (session.downloads.length > 0) {
+        badges.createEl("span", { text: `\u2193 ${session.downloads.length}`, cls: "dashboard-sync-badge dashboard-sync-badge-download" });
+      }
+      if (session.deletions.length > 0) {
+        badges.createEl("span", { text: `\u2715 ${session.deletions.length}`, cls: "dashboard-sync-badge dashboard-sync-badge-delete" });
+      }
+      if (session.totalCount === 0) {
+        badges.createEl("span", { text: "\u65E0\u53D8\u66F4", cls: "dashboard-sync-badge dashboard-sync-badge-none" });
+      }
+      const toggleBtn = sessionHeader.createEl("button", { cls: "dashboard-sync-toggle" });
+      toggleBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+      const fileList = sessionBlock.createDiv("dashboard-sync-files");
+      fileList.style.display = "none";
+      const doToggle = () => {
+        const isHidden = fileList.style.display === "none";
+        fileList.style.display = isHidden ? "block" : "none";
+        toggleBtn.classList.toggle("expanded", isHidden);
+      };
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        doToggle();
+      });
+      sessionHeader.addEventListener("click", doToggle);
+      this.renderSyncFileGroup(fileList, "\u5DF2\u4E0A\u4F20", session.uploads, "upload");
+      this.renderSyncFileGroup(fileList, "\u5DF2\u4E0B\u8F7D", session.downloads, "download");
+      this.renderSyncFileGroup(fileList, "\u5DF2\u5220\u9664", session.deletions, "delete");
+    }
+  }
+  renderSyncFileGroup(parent, label, files, cls) {
+    if (files.length === 0)
+      return;
+    const group = parent.createDiv("dashboard-sync-file-group");
+    group.createEl("span", { text: label, cls: `dashboard-sync-file-label dashboard-sync-file-${cls}` });
+    for (const f of files) {
+      const item = group.createEl("div", { text: f, cls: "dashboard-sync-file-item" });
+      item.addEventListener("click", () => {
+        const cleanPath = f.replace(/^\/+|\/+$/g, "");
+        const abstract = this.app.vault.getAbstractFileByPath(cleanPath);
+        if (abstract instanceof import_obsidian9.TFile) {
+          this.app.workspace.getLeaf(false).openFile(abstract);
+        } else {
+          if (abstract instanceof import_obsidian9.TFolder) {
+            this.fileService.toggleFolderInExplorer(cleanPath);
+          } else {
+            const lastSlash = cleanPath.lastIndexOf("/");
+            if (lastSlash > 0) {
+              this.fileService.toggleFolderInExplorer(cleanPath.slice(0, lastSlash));
+            }
+          }
+        }
+      });
     }
   }
   setupAutoPush() {

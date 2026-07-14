@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, TFile, Notice, requestUrl, Modal } from "obsidian";
+import { ItemView, WorkspaceLeaf, TFile, TFolder, Notice, requestUrl, Modal } from "obsidian";
 import { DashboardSettings, FileStats, TokenUsage } from "../types";
 import { FileService, RecentFile } from "../services/FileService";
 import { LogService } from "../services/LogService";
@@ -6,6 +6,7 @@ import { LLMService } from "../services/LLMService";
 import { PluginManageService } from "../services/PluginManageService";
 import { HeatmapService } from "../services/HeatmapService";
 import { GitService, GitFileStatus } from "../services/GitService";
+import { RemotelySaveService, SyncSession } from "../services/RemotelySaveService";
 import { ModelConfigModal } from "../modals/ModelConfigModal";
 import { FolderConfigModal } from "../modals/FolderConfigModal";
 import { ReportConfigModal } from "../modals/ReportConfigModal";
@@ -23,6 +24,7 @@ export class DashboardView extends ItemView {
   private pluginService: PluginManageService;
   private heatmapService: HeatmapService;
   private gitService: GitService;
+  private remotelySaveService: RemotelySaveService;
 
   private executing = false;
   private rendering = false;
@@ -52,6 +54,7 @@ export class DashboardView extends ItemView {
     this.pluginService = new PluginManageService(this.app);
     this.heatmapService = new HeatmapService(this.app);
     this.gitService = new GitService(this.app);
+    this.remotelySaveService = new RemotelySaveService();
   }
 
   getViewType() { return DASHBOARD_VIEW_TYPE; }
@@ -221,6 +224,7 @@ export class DashboardView extends ItemView {
       this.renderModule5(scroll);
       this.renderModule4(scroll);
       await this.renderGitModule(scroll);
+      await this.renderRemotelySaveModule(scroll);
       this.renderTaskQuickAdd(scroll);
       this.renderModule6(scroll);
 
@@ -1199,6 +1203,130 @@ export class DashboardView extends ItemView {
           cls: "dashboard-git-commit-date",
         });
       }
+    }
+  }
+
+  private isRemotelySaveEnabled(): boolean {
+    const plugins = (this.app as any).plugins;
+    if (!plugins) return false;
+    const manifests = plugins.manifests ?? {};
+    if (!manifests["remotely-save"]) return false;
+    const enabledSet: Set<string> | Record<string, boolean> = plugins.enabledPlugins ?? {};
+    if (enabledSet instanceof Set) return enabledSet.has("remotely-save");
+    return !!(enabledSet as Record<string, boolean>)["remotely-save"];
+  }
+
+  private async renderRemotelySaveModule(parent: HTMLElement) {
+    if (!this.isRemotelySaveEnabled()) return;
+
+    const mod = parent.createDiv("dashboard-module");
+    mod.id = "dashboard-remotely-save-module";
+
+    const header = mod.createDiv("dashboard-module-header");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    const titleWrap = header.createDiv();
+    titleWrap.createEl("span", { text: "☁️ OneDrive 同步", cls: "dashboard-module-title" });
+
+    const body = mod.createDiv("dashboard-module-body dashboard-sync-body");
+
+    const sessions = await this.remotelySaveService.getSyncHistory(7);
+    if (sessions.length === 0) {
+      body.createDiv({
+        text: "暂无 Remotely Save 同步记录",
+        cls: "dashboard-git-mobile-hint",
+      });
+      return;
+    }
+
+    // Total sync count in header
+    header.createEl("span", {
+      text: `${sessions.length} 次同步`,
+      cls: "dashboard-module-badge",
+    });
+
+    const sessionList = body.createDiv("dashboard-sync-session-list");
+
+    for (const session of sessions) {
+      const sessionBlock = sessionList.createDiv("dashboard-sync-session");
+      const sessionHeader = sessionBlock.createDiv("dashboard-sync-session-header");
+
+      const date = new Date(session.ts);
+      const dateStr = date.toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      sessionHeader.createEl("span", {
+        text: `${dateStr}`,
+        cls: "dashboard-sync-time",
+      });
+
+      // Count badges
+      const badges = sessionHeader.createDiv("dashboard-sync-badges");
+      if (session.uploads.length > 0) {
+        badges.createEl("span", { text: `↑ ${session.uploads.length}`, cls: "dashboard-sync-badge dashboard-sync-badge-upload" });
+      }
+      if (session.downloads.length > 0) {
+        badges.createEl("span", { text: `↓ ${session.downloads.length}`, cls: "dashboard-sync-badge dashboard-sync-badge-download" });
+      }
+      if (session.deletions.length > 0) {
+        badges.createEl("span", { text: `✕ ${session.deletions.length}`, cls: "dashboard-sync-badge dashboard-sync-badge-delete" });
+      }
+      if (session.totalCount === 0) {
+        badges.createEl("span", { text: "无变更", cls: "dashboard-sync-badge dashboard-sync-badge-none" });
+      }
+
+      // Toggle
+      const toggleBtn = sessionHeader.createEl("button", { cls: "dashboard-sync-toggle" });
+      toggleBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+      const fileList = sessionBlock.createDiv("dashboard-sync-files");
+      fileList.style.display = "none";
+
+      const doToggle = () => {
+        const isHidden = fileList.style.display === "none";
+        fileList.style.display = isHidden ? "block" : "none";
+        toggleBtn.classList.toggle("expanded", isHidden);
+      };
+      toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); doToggle(); });
+      sessionHeader.addEventListener("click", doToggle);
+
+      this.renderSyncFileGroup(fileList, "已上传", session.uploads, "upload");
+      this.renderSyncFileGroup(fileList, "已下载", session.downloads, "download");
+      this.renderSyncFileGroup(fileList, "已删除", session.deletions, "delete");
+    }
+  }
+
+  private renderSyncFileGroup(
+    parent: HTMLElement,
+    label: string,
+    files: string[],
+    cls: string
+  ) {
+    if (files.length === 0) return;
+    const group = parent.createDiv("dashboard-sync-file-group");
+    group.createEl("span", { text: label, cls: `dashboard-sync-file-label dashboard-sync-file-${cls}` });
+    for (const f of files) {
+      const item = group.createEl("div", { text: f, cls: "dashboard-sync-file-item" });
+      item.addEventListener("click", () => {
+        const cleanPath = f.replace(/^\/+|\/+$/g, "");
+        const abstract = this.app.vault.getAbstractFileByPath(cleanPath);
+        if (abstract instanceof TFile) {
+          this.app.workspace.getLeaf(false).openFile(abstract);
+        } else {
+          // Try as folder: expand in file explorer
+          if (abstract instanceof TFolder) {
+            this.fileService.toggleFolderInExplorer(cleanPath);
+          } else {
+            // Path doesn't exist in vault — try parent folder
+            const lastSlash = cleanPath.lastIndexOf("/");
+            if (lastSlash > 0) {
+              this.fileService.toggleFolderInExplorer(cleanPath.slice(0, lastSlash));
+            }
+          }
+        }
+      });
     }
   }
 
