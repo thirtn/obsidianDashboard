@@ -88,7 +88,7 @@ class DashboardSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Dashboard 设置" });
 
-    new Setting(containerEl)
+    const setting1 = new Setting(containerEl)
       .setName("标签页标题")
       .setDesc("自定义 Dashboard 标签页显示的名称，可随时修改")
       .addText((text) =>
@@ -100,8 +100,9 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting1, "Dashboard");
 
-    new Setting(containerEl)
+    const setting2 = new Setting(containerEl)
       .setName("标签页描述")
       .setDesc("显示在标签页标题下方的描述文字")
       .addText((text) =>
@@ -113,8 +114,9 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting2, "禹思天下有溺者，由己溺之也");
 
-    new Setting(containerEl)
+    const setting3 = new Setting(containerEl)
       .setName("API Base URL")
       .setDesc("OpenAI Compatible 接口地址")
       .addText((text) =>
@@ -126,6 +128,7 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting3, "https://api.openai.com/v1");
 
     new Setting(containerEl)
       .setName("API Key")
@@ -141,7 +144,7 @@ class DashboardSettingTab extends PluginSettingTab {
         text.inputEl.type = "password";
       });
 
-    new Setting(containerEl)
+    const setting4 = new Setting(containerEl)
       .setName("模型名称")
       .addText((text) =>
         text
@@ -152,6 +155,7 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting4, "gpt-4o");
 
     new Setting(containerEl)
       .setName("Temperature")
@@ -193,7 +197,7 @@ class DashboardSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    const setting5 = new Setting(containerEl)
       .setName("余额接口地址")
       .setDesc("选填。如 DeepSeek: https://api.deepseek.com/user/balance")
       .addText((text) =>
@@ -205,6 +209,7 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting5, "https://api.deepseek.com/user/balance");
 
     new Setting(containerEl)
       .setName("统计文件夹")
@@ -299,7 +304,7 @@ class DashboardSettingTab extends PluginSettingTab {
 
     // ─── Git Sync Config ──────────────────────────────────────────────────────
 
-    containerEl.createEl("h3", { text: "Git 同步 (Gitee)" });
+    containerEl.createEl("h3", { text: "Git 同步 (GitHub)" });
 
     new Setting(containerEl)
       .setName("启用 Git 同步")
@@ -313,20 +318,21 @@ class DashboardSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    const setting6 = new Setting(containerEl)
       .setName("仓库地址")
-      .setDesc("Gitee 仓库 HTTPS 地址，如 https://gitee.com/username/repo.git")
+      .setDesc("GitHub 仓库 HTTPS 地址，如 https://github.com/username/repo.git")
       .addText((text) =>
         text
-          .setPlaceholder("https://gitee.com/username/repo.git")
+          .setPlaceholder("https://github.com/username/repo.git")
           .setValue(this.plugin.settings.gitRemoteURL)
           .onChange(async (value) => {
             this.plugin.settings.gitRemoteURL = value.trim();
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting6, "https://github.com/username/repo.git");
 
-    new Setting(containerEl)
+    const setting7 = new Setting(containerEl)
       .setName("远程名称")
       .setDesc("Git remote 名称，默认 origin")
       .addText((text) =>
@@ -338,8 +344,9 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting7, "origin");
 
-    new Setting(containerEl)
+    const setting8 = new Setting(containerEl)
       .setName("分支名")
       .setDesc("默认分支名，如 main 或 master")
       .addText((text) =>
@@ -351,10 +358,11 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting8, "main");
 
-    new Setting(containerEl)
-      .setName("Gitee 用户名")
-      .setDesc("Gitee 登录用户名或邮箱")
+    const setting9 = new Setting(containerEl)
+      .setName("GitHub 用户名")
+      .setDesc("GitHub 登录用户名或邮箱")
       .addText((text) =>
         text
           .setPlaceholder("your-username")
@@ -364,10 +372,11 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting9, "your-username");
 
     new Setting(containerEl)
-      .setName("Gitee Token")
-      .setDesc("Gitee 私人令牌（https://gitee.com/profile/personal_access_tokens），存储于本地 data.json 中")
+      .setName("GitHub Token")
+      .setDesc("GitHub 私人令牌（https://github.com/settings/tokens），存储于本地 data.json 中")
       .addText((text) => {
         text
           .setPlaceholder("your-token")
@@ -391,7 +400,7 @@ class DashboardSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    const setting10 = new Setting(containerEl)
       .setName("自动 Push 间隔（分钟）")
       .setDesc("设为 0 表示每次 vault 变更后自动 push")
       .addText((text) =>
@@ -406,8 +415,9 @@ class DashboardSettingTab extends PluginSettingTab {
             }
           })
       );
+    this.addExampleHint(setting10, "30");
 
-    new Setting(containerEl)
+    const setting11 = new Setting(containerEl)
       .setName("Commit 消息模板")
       .setDesc("支持 {{date}} 和 {{time}} 占位符")
       .addText((text) =>
@@ -419,5 +429,17 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    this.addExampleHint(setting11, "auto: {{date}} {{time}}");
+  }
+
+  private addExampleHint(setting: Setting, example: string) {
+    const input = setting.controlEl.querySelector("input");
+    if (!input) return;
+    const hint = createSpan({ cls: "dashboard-example-hint", text: "📋", attr: { "data-tooltip": example } });
+    hint.addEventListener("click", () => {
+      input.value = example;
+      input.dispatchEvent(new Event("input"));
+    });
+    setting.controlEl.appendChild(hint);
   }
 }

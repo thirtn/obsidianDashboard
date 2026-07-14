@@ -60,11 +60,51 @@ export class DashboardView extends ItemView {
   updateSettings(settings: DashboardSettings) {
     this.settings = settings;
     this.llmService.updateSettings(settings);
-    // Update tab title
-    const title = this.settings.dashboardTitle || "Dashboard";
-    const titleEl = (this.leaf as any).tabHeaderEl?.querySelector(".workspace-tab-header-inner-title");
-    if (titleEl) titleEl.textContent = title;
+    // Update tab title in the workspace tab header
+    this.updateTabTitle();
     this.render();
+  }
+
+  private updateTabTitle() {
+    const title = this.settings.dashboardTitle || "Dashboard";
+
+    // Update the view header title (the centered title at the top of the content area)
+    const viewHeaderTitle = this.containerEl.querySelector(".view-header-title");
+    if (viewHeaderTitle) viewHeaderTitle.textContent = title;
+
+    // Update the workspace tab header title (the tab in the tab bar)
+    const leafAny = this.leaf as any;
+    const tabTitleEl = leafAny.tabHeaderEl?.querySelector(".workspace-tab-header-inner-title");
+    if (tabTitleEl) {
+      tabTitleEl.textContent = title;
+      return;
+    }
+
+    // Fallback: find tab header by leaf index via DOM traversal
+    const leafContent = this.containerEl.closest(".workspace-leaf");
+    if (!leafContent) return;
+
+    const workspaceTabs = leafContent.closest(".workspace-tabs");
+    if (!workspaceTabs) return;
+
+    const tabContainer = workspaceTabs.querySelector(":scope > .workspace-tab-container");
+    const leaves = tabContainer
+      ? Array.from(tabContainer.querySelectorAll(":scope > .workspace-leaf"))
+      : [];
+    const leafIndex = leaves.indexOf(leafContent);
+    if (leafIndex < 0) return;
+
+    const headerInner = workspaceTabs.querySelector(
+      ":scope > .workspace-tab-header-container > .workspace-tab-header-container-inner"
+    );
+    const tabHeaders = headerInner
+      ? Array.from(headerInner.querySelectorAll(":scope > .workspace-tab-header"))
+      : [];
+    const targetHeader = tabHeaders[leafIndex];
+    if (targetHeader) {
+      const innerTitle = targetHeader.querySelector(".workspace-tab-header-inner-title");
+      if (innerTitle) innerTitle.textContent = title;
+    }
   }
 
   async onOpen() {
@@ -147,12 +187,15 @@ export class DashboardView extends ItemView {
     this.rendering = true;
     this.needsRerender = false;
     try {
+      // Clean up orphaned floating elements from previous render
+      document.body.querySelectorAll(".dashboard-heatmap-tip, .dashboard-popover").forEach((el) => el.remove());
       this.lastRenderTime = Date.now();
       const container = this.containerEl.children[1] as HTMLElement;
 
-      // Save scroll position before rebuilding DOM
+      // Save scroll positions before rebuilding DOM
       const oldScroll = container.querySelector(".dashboard-scroll") as HTMLElement | null;
       const scrollTop = oldScroll?.scrollTop ?? 0;
+      const containerScrollTop = container.scrollTop;
 
       // Build new content off-screen to avoid visible flash/jitter
       const offscreen = document.createElement("div");
@@ -161,15 +204,16 @@ export class DashboardView extends ItemView {
       this.renderHeader(offscreen);
       this.renderSearch(offscreen);
       const scroll = offscreen.createDiv("dashboard-scroll");
-      this.renderModule1(scroll);
+      await this.renderModule1(scroll);
       this.renderModule5(scroll);
       this.renderModule4(scroll);
-      this.renderGitModule(scroll);
+      await this.renderGitModule(scroll);
       this.renderTaskQuickAdd(scroll);
       this.renderModule6(scroll);
 
-      // Atomic swap + restore scroll position in one synchronous block
+      // Atomic swap + restore scroll positions in one synchronous block
       container.replaceChildren(offscreen);
+      container.scrollTop = containerScrollTop;
       scroll.scrollTop = scrollTop;
     } finally {
       this.rendering = false;
@@ -841,7 +885,7 @@ export class DashboardView extends ItemView {
     } else {
       const table = body.createEl("table", { cls: "dashboard-plugin-table" });
       const hr = table.createEl("thead").createEl("tr");
-      for (const h of ["插件名称", "说明", "版本", "启用"]) hr.createEl("th", { text: h });
+      for (const h of ["插件名称", "说明", "版本", "启用", "设置"]) hr.createEl("th", { text: h });
       const tbody = table.createEl("tbody");
 
       for (const p of plugins) {
@@ -878,6 +922,16 @@ export class DashboardView extends ItemView {
           } finally {
             cb.disabled = false;
           }
+        });
+
+        const settingsTd = tr.createEl("td");
+        const settingsBtn = settingsTd.createEl("button", {
+          cls: "dashboard-icon-btn",
+          title: `${p.name} 设置`,
+        });
+        settingsBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+        settingsBtn.addEventListener("click", () => {
+          this.pluginService.openSpecificPluginSettings(p.id);
         });
       }
     }
@@ -919,7 +973,7 @@ export class DashboardView extends ItemView {
 
     if (!this.settings.gitEnabled) {
       body.createDiv({
-        text: "Git 同步未启用。请在设置中配置 Gitee 仓库信息并开启同步。",
+        text: "Git 同步未启用。请在设置中配置 GitHub 仓库信息并开启同步。",
         cls: "dashboard-git-mobile-hint",
       });
       const settingsBtn = body.createEl("button", {
@@ -1086,12 +1140,11 @@ export class DashboardView extends ItemView {
     });
     rollbackBtn.addEventListener("click", async () => {
       const files = await this.gitService.getStatusFiles();
-      const modified = files.filter((f) => f.status[1] !== " ");
-      if (modified.length === 0) {
+      if (files.length === 0) {
         new Notice("没有可以回滚的变更");
         return;
       }
-      this.showRollbackConfirmModal(modified);
+      this.showRollbackConfirmModal(files);
     });
 
     // Refresh status button
@@ -1130,7 +1183,10 @@ export class DashboardView extends ItemView {
       });
       for (const c of commits) {
         const row = commitSection.createDiv("dashboard-git-commit-row");
-        row.createEl("span", { text: c.hash, cls: "dashboard-git-commit-hash" });
+        const hashEl = row.createEl("span", { text: c.hash, cls: "dashboard-git-commit-hash" });
+        hashEl.style.cursor = "pointer";
+        this.attachCommitFilePopover(hashEl, c.hash);
+        row.createEl("span", { text: c.author, cls: "dashboard-git-commit-author" });
         row.createEl("span", { text: c.message, cls: "dashboard-git-commit-msg" });
         row.createEl("span", {
           text: this.formatGitDate(c.date),
@@ -1238,6 +1294,65 @@ export class DashboardView extends ItemView {
       popover.addEventListener("mouseleave", () => {
         hideTimer = setTimeout(remove, 200);
       });
+    };
+
+    trigger.addEventListener("mouseenter", show);
+    trigger.addEventListener("mouseleave", () => {
+      hideTimer = setTimeout(remove, 200);
+    });
+  }
+
+  private attachCommitFilePopover(trigger: HTMLElement, commitHash: string) {
+    let popover: HTMLElement | null = null;
+    let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearTimer = () => {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    };
+
+    const remove = () => {
+      clearTimer();
+      if (popover) { popover.remove(); popover = null; }
+    };
+
+    const show = async () => {
+      clearTimer();
+      remove();
+
+      popover = document.body.createDiv("dashboard-popover");
+      popover.createDiv("dashboard-popover-title").textContent = "加载中...";
+
+      const rect = trigger.getBoundingClientRect();
+      popover.style.top = `${rect.bottom + 6}px`;
+      popover.style.left = `${Math.min(rect.left, window.innerWidth - 420)}px`;
+
+      popover.addEventListener("mouseenter", clearTimer);
+      popover.addEventListener("mouseleave", () => {
+        hideTimer = setTimeout(remove, 200);
+      });
+
+      // Fetch commit files asynchronously
+      const files = await this.gitService.getCommitFiles(commitHash);
+      popover.empty();
+      popover.createDiv("dashboard-popover-title").textContent = `提交 ${commitHash} (${files.length} 个文件)`;
+
+      if (files.length === 0) {
+        popover.createDiv("dashboard-popover-item").textContent = "无法获取文件列表";
+      } else {
+        for (const filePath of files) {
+          const item = popover.createDiv("dashboard-popover-item");
+          item.textContent = filePath;
+          item.style.cursor = "pointer";
+          item.addEventListener("mousedown", async (e) => {
+            e.preventDefault();
+            const f = this.app.vault.getAbstractFileByPath(filePath);
+            if (f instanceof TFile) {
+              await this.app.workspace.getLeaf(false).openFile(f);
+            }
+            remove();
+          });
+        }
+      }
     };
 
     trigger.addEventListener("mouseenter", show);

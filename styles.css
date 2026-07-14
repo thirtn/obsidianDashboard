@@ -898,6 +898,49 @@
   box-sizing: border-box;
 }
 
+.dashboard-modal .dashboard-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboard-modal .dashboard-input-wrap input {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-example-hint {
+  font-size: 11px;
+  color: var(--text-accent);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.dashboard-example-hint:hover {
+  color: var(--text-accent-hover);
+  text-decoration: underline;
+}
+
+.dashboard-example-hint[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
 .dashboard-modal-desc {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
@@ -1309,6 +1352,20 @@
   color: var(--text-accent);
   font-size: 11px;
   flex-shrink: 0;
+}
+
+.dashboard-git-commit-hash:hover {
+  text-decoration: underline;
+}
+
+.dashboard-git-commit-author {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboard-git-commit-msg {

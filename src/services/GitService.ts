@@ -17,6 +17,7 @@ export interface GitCommit {
   hash: string;
   message: string;
   date: string;
+  author: string;
 }
 
 export class GitService {
@@ -46,13 +47,15 @@ export class GitService {
     }
     const { execSync } = require("child_process");
     try {
-      return execSync(cmd, {
+      const result = execSync(cmd, {
         cwd: this.vaultPath,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
         timeout: 30000,
       }).toString();
+      return result;
     } catch (e: any) {
+      console.log(`[yyDashboard] exec failed (expected for --quiet checks): ${cmd}`);
       throw new Error(e.stderr || e.message || "Git 命令执行失败");
     }
   }
@@ -91,6 +94,18 @@ export class GitService {
     }
   }
 
+  private parsePorcelainPath(line: string): string {
+    // Strip BOM if present (Electron may add it)
+    const clean = line.replace(/^\ufeff/, '');
+    // Porcelain format: "XY path" or "XY old -> new" (renames)
+    // Use \S{0,2}\s+ to be resilient against encoding quirks
+    const match = clean.match(/^\S{0,2}\s+(.*)$/);
+    if (!match) { console.log("[yyDashboard] parsePorcelainPath no match for:", JSON.stringify(line)); return ""; }
+    const raw = match[1];
+    const arrow = raw.indexOf(" -> ");
+    return arrow > -1 ? raw.slice(arrow + 4) : raw;
+  }
+
   async getStatus(): Promise<GitStatus> {
     if (this.isMobile) return { clean: true, files: [], ahead: 0, behind: 0 };
 
@@ -100,7 +115,7 @@ export class GitService {
       const output = this.exec("git -c core.quotePath=false status --porcelain");
       if (output.trim()) {
         clean = false;
-        files = output.trim().split(/\r?\n/).map((line) => line.slice(3));
+        files = output.trim().split(/\r?\n/).map((line) => this.parsePorcelainPath(line));
       }
     } catch { /* ignore */ }
 
@@ -125,19 +140,35 @@ export class GitService {
       const output = this.exec("git -c core.quotePath=false status --porcelain");
       if (!output.trim()) return [];
       console.log("[yyDashboard] git status --porcelain raw output:", JSON.stringify(output));
-      return output.trim().split(/\r?\n/).map((line) => ({
-        status: line.slice(0, 2),
-        path: line.slice(3),
-        staged: line[0] !== " " && line[0] !== "?",
-      }));
-    } catch {
+      const lines = output.trim().split(/\r?\n/);
+      if (lines.length > 0) {
+        console.log("[yyDashboard] first line charCodes:", JSON.stringify([...lines[0]].map((c: string) => c.charCodeAt(0))));
+      }
+      const files = lines.map((line) => {
+        const cleanLine = line.replace(/^\ufeff/, '');
+        return {
+          status: cleanLine.slice(0, 2),
+          path: this.parsePorcelainPath(line),
+          staged: cleanLine[0] !== " " && cleanLine[0] !== "?",
+        };
+      });
+      console.log("[yyDashboard] getStatusFiles parsed:", JSON.stringify(files));
+      return files;
+    } catch (e: any) {
+      console.error("[yyDashboard] getStatusFiles failed:", e.message);
       return [];
     }
   }
 
   async stageFiles(files: string[]): Promise<string[]> {
+    console.log(`[yyDashboard] stageFiles called with ${files.length} files:`, JSON.stringify(files));
     const staged: string[] = [];
+    const skipped: string[] = [];
     for (const f of files) {
+      if (!f || !f.trim()) {
+        console.log("[yyDashboard] Skipping empty/whitespace path");
+        continue;
+      }
       // Try git add first (works for new/modified files)
       try {
         this.exec(`git add -- "${f.replace(/"/g, '\\"')}"`);
@@ -155,11 +186,19 @@ export class GitService {
           this.exec(`git add -A -- "${f.replace(/"/g, '\\"')}"`);
           staged.push(f);
           continue;
+        } catch { /* fall through */ }
+        // Try git add -f (force add, bypasses .gitignore)
+        try {
+          this.exec(`git add -f -- "${f.replace(/"/g, '\\"')}"`);
+          staged.push(f);
+          continue;
         } catch (e3: any) {
           console.log(`[yyDashboard] Skipping file: "${f}", add error: ${e1.message}, rm error: ${e3.message}`);
+          skipped.push(f);
         }
       }
     }
+    console.log(`[yyDashboard] stageFiles result: staged=${staged.length}, skipped=${skipped.length}, skipped=`, JSON.stringify(skipped));
     if (staged.length === 0 && files.length > 0) {
       throw new Error("没有文件可以暂存（所有文件均已不存在）");
     }
@@ -167,19 +206,35 @@ export class GitService {
   }
 
   async restoreFiles(files: string[]): Promise<string[]> {
+    console.log("[yyDashboard] restoreFiles called with:", JSON.stringify(files));
     const restored: string[] = [];
     for (const f of files) {
+      let ok = false;
+      // Step 1: unstage if needed (ignore error if not staged)
+      try { this.exec(`git restore --staged -- "${f.replace(/"/g, '\\"')}"`); } catch { /* not staged */ }
+      // Step 2: restore working tree from index (works for tracked files)
       try {
-        // git restore (modern) or git checkout (legacy)
         this.exec(`git restore -- "${f.replace(/"/g, '\\"')}"`);
-        restored.push(f);
-      } catch {
+        ok = true;
+      } catch { /* try git checkout fallback */ }
+      // Step 3: git checkout HEAD (handles deleted files, staged+unstaged)
+      if (!ok) {
+        try {
+          this.exec(`git checkout HEAD -- "${f.replace(/"/g, '\\"')}"`);
+          ok = true;
+        } catch { /* not in HEAD, might be untracked */ }
+      }
+      // Step 4: legacy git checkout (restore from index on old git versions)
+      if (!ok) {
         try {
           this.exec(`git checkout -- "${f.replace(/"/g, '\\"')}"`);
-          restored.push(f);
-        } catch (e: any) {
-          console.log(`[yyDashboard] Failed to restore: ${f}, error: ${e.message}`);
-        }
+          ok = true;
+        } catch { /* truly can't restore */ }
+      }
+      if (ok) {
+        restored.push(f);
+      } else {
+        console.log(`[yyDashboard] Failed to restore: ${f}`);
       }
     }
     if (restored.length === 0 && files.length > 0) {
@@ -267,7 +322,7 @@ export class GitService {
     if (this.isMobile) return [];
     try {
       const output = this.exec(
-        `git log --oneline --format="%H|%s|%ai" -n ${n}`
+        `git log --oneline --format="%H|%an|%s|%ai" -n ${n}`
       );
       return output
         .trim()
@@ -276,11 +331,28 @@ export class GitService {
         .map((line) => {
           const idx1 = line.indexOf("|");
           const idx2 = line.indexOf("|", idx1 + 1);
+          const idx3 = line.indexOf("|", idx2 + 1);
           const hash = line.slice(0, idx1);
-          const message = line.slice(idx1 + 1, idx2);
-          const date = line.slice(idx2 + 1);
-          return { hash: hash.slice(0, 7), message, date };
+          const author = line.slice(idx1 + 1, idx2);
+          const message = line.slice(idx2 + 1, idx3);
+          const date = line.slice(idx3 + 1);
+          return { hash: hash.slice(0, 7), message, date, author };
         });
+    } catch {
+      return [];
+    }
+  }
+
+  async getCommitFiles(hash: string): Promise<string[]> {
+    if (this.isMobile) return [];
+    try {
+      const output = this.exec(
+        `git diff-tree --no-commit-id --name-only -r ${hash}`
+      );
+      return output
+        .trim()
+        .split("\n")
+        .filter(Boolean);
     } catch {
       return [];
     }

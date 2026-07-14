@@ -32,7 +32,7 @@ export class GitConfigModal extends Modal {
       "仓库地址",
       this.settings.gitRemoteURL,
       (v) => (this.settings.gitRemoteURL = v.trim()),
-      "https://gitee.com/username/repo.git"
+      "https://github.com/username/repo.git"
     );
 
     // Remote name + Branch in one row
@@ -56,14 +56,14 @@ export class GitConfigModal extends Modal {
     const row2 = contentEl.createDiv("dashboard-git-config-row");
     this.createTextFieldInRow(
       row2,
-      "Gitee 用户名",
+      "GitHub 用户名",
       this.settings.gitUsername,
       (v) => (this.settings.gitUsername = v.trim()),
       "your-username"
     );
     this.createPasswordFieldInRow(
       row2,
-      "Gitee Token",
+      "GitHub Token",
       this.settings.gitPassword,
       (v) => (this.settings.gitPassword = v.trim()),
       "your-token"
@@ -98,7 +98,7 @@ export class GitConfigModal extends Modal {
 
     // Token help text
     contentEl.createDiv({
-      text: "Token 获取地址: https://gitee.com/profile/personal_access_tokens",
+      text: "Token 获取地址: https://github.com/settings/tokens",
       cls: "dashboard-field-hint",
     });
 
@@ -135,15 +135,18 @@ export class GitConfigModal extends Modal {
     label: string,
     value: string,
     onChange: (v: string) => void,
-    placeholder: string
+    placeholder: string,
+    example?: string
   ) {
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input") as HTMLInputElement;
+    const wrap = row.createDiv("dashboard-input-wrap");
+    const input = wrap.createEl("input") as HTMLInputElement;
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
     input.addEventListener("input", () => onChange(input.value));
+    this.addExampleHint(wrap, input, example ?? placeholder);
   }
 
   private createTextFieldInRow(
@@ -151,16 +154,19 @@ export class GitConfigModal extends Modal {
     label: string,
     value: string,
     onChange: (v: string) => void,
-    placeholder: string
+    placeholder: string,
+    example?: string
   ) {
     const field = parent.createDiv("dashboard-git-config-half");
     field.createEl("label", { text: label, cls: "dashboard-git-config-label" });
-    const input = field.createEl("input") as HTMLInputElement;
+    const wrap = field.createDiv("dashboard-input-wrap");
+    const input = wrap.createEl("input") as HTMLInputElement;
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
     input.style.width = "100%";
     input.addEventListener("input", () => onChange(input.value));
+    this.addExampleHint(wrap, input, example ?? placeholder);
   }
 
   private createPasswordFieldInRow(
@@ -189,10 +195,12 @@ export class GitConfigModal extends Modal {
   ) {
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input") as HTMLInputElement;
+    const wrap = row.createDiv("dashboard-input-wrap");
+    const input = wrap.createEl("input") as HTMLInputElement;
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
+    input.addEventListener("input", () => onChange(input.value));
 
     const preview = row.createDiv("dashboard-format-preview");
     const updatePreview = () => {
@@ -205,9 +213,15 @@ export class GitConfigModal extends Modal {
       preview.textContent = `示例: ${example}`;
     };
     updatePreview();
-    input.addEventListener("input", () => {
-      onChange(input.value);
-      updatePreview();
+    this.addExampleHint(wrap, input, placeholder);
+  }
+
+  private addExampleHint(wrap: HTMLElement, input: HTMLInputElement, example: string) {
+    if (!example || example === "sk-..." || example === "https://..." || example === "your-token") return;
+    const hint = wrap.createEl("span", { cls: "dashboard-example-hint", text: "📋", attr: { "data-tooltip": example } });
+    hint.addEventListener("click", () => {
+      input.value = example;
+      input.dispatchEvent(new Event("input"));
     });
   }
 

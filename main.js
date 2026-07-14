@@ -511,14 +511,14 @@ var PluginManageService = class {
       return !!enabledSet[id];
     };
     return Object.entries(manifests).map(([id, manifest]) => {
-      var _a2, _b2, _c, _d, _e, _f, _g, _h;
+      var _a2, _b2, _c, _d;
       return {
         id,
         name: (_a2 = manifest.name) != null ? _a2 : id,
         version: (_b2 = manifest.version) != null ? _b2 : "?",
         enabled: isEnabled(id),
-        hasSettings: !!(((_d = (_c = plugins.plugins) == null ? void 0 : _c[id]) == null ? void 0 : _d.settingsDisplay) || ((_f = (_e = plugins.plugins) == null ? void 0 : _e[id]) == null ? void 0 : _f.onSettingsTab)),
-        description: (_h = (_g = ZH_DESCRIPTIONS[id]) != null ? _g : manifest.description) != null ? _h : ""
+        hasSettings: true,
+        description: (_d = (_c = ZH_DESCRIPTIONS[id]) != null ? _c : manifest.description) != null ? _d : ""
       };
     }).sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -538,9 +538,23 @@ var PluginManageService = class {
     (_d = (_c = this.app.setting) == null ? void 0 : _c.openTabById) == null ? void 0 : _d.call(_c, "community-plugins");
   }
   openSpecificPluginSettings(pluginId) {
-    var _a, _b, _c, _d;
-    (_b = (_a = this.app.setting) == null ? void 0 : _a.open) == null ? void 0 : _b.call(_a);
-    (_d = (_c = this.app.setting) == null ? void 0 : _c.openTabById) == null ? void 0 : _d.call(_c, pluginId);
+    const setting = this.app.setting;
+    if (!setting)
+      return;
+    setting.open();
+    setTimeout(() => {
+      var _a, _b;
+      if (typeof setting.openTabById === "function") {
+        setting.openTabById(pluginId);
+      }
+      const tab = (_a = setting.settingTabs) == null ? void 0 : _a.find(
+        (t) => {
+          var _a2, _b2;
+          return t.id === pluginId || ((_b2 = (_a2 = t.plugin) == null ? void 0 : _a2.manifest) == null ? void 0 : _b2.id) === pluginId;
+        }
+      );
+      (_b = tab == null ? void 0 : tab.navEl) == null ? void 0 : _b.click();
+    }, 150);
   }
 };
 
@@ -619,13 +633,15 @@ var GitService = class {
     }
     const { execSync } = require("child_process");
     try {
-      return execSync(cmd, {
+      const result = execSync(cmd, {
         cwd: this.vaultPath,
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
         timeout: 3e4
       }).toString();
+      return result;
     } catch (e) {
+      console.log(`[yyDashboard] exec failed (expected for --quiet checks): ${cmd}`);
       throw new Error(e.stderr || e.message || "Git \u547D\u4EE4\u6267\u884C\u5931\u8D25");
     }
   }
@@ -660,6 +676,17 @@ var GitService = class {
       return false;
     }
   }
+  parsePorcelainPath(line) {
+    const clean = line.replace(/^\ufeff/, "");
+    const match = clean.match(/^\S{0,2}\s+(.*)$/);
+    if (!match) {
+      console.log("[yyDashboard] parsePorcelainPath no match for:", JSON.stringify(line));
+      return "";
+    }
+    const raw = match[1];
+    const arrow = raw.indexOf(" -> ");
+    return arrow > -1 ? raw.slice(arrow + 4) : raw;
+  }
   async getStatus() {
     if (this.isMobile)
       return { clean: true, files: [], ahead: 0, behind: 0 };
@@ -669,7 +696,7 @@ var GitService = class {
       const output = this.exec("git -c core.quotePath=false status --porcelain");
       if (output.trim()) {
         clean = false;
-        files = output.trim().split(/\r?\n/).map((line) => line.slice(3));
+        files = output.trim().split(/\r?\n/).map((line) => this.parsePorcelainPath(line));
       }
     } catch (e) {
     }
@@ -695,18 +722,34 @@ var GitService = class {
       if (!output.trim())
         return [];
       console.log("[yyDashboard] git status --porcelain raw output:", JSON.stringify(output));
-      return output.trim().split(/\r?\n/).map((line) => ({
-        status: line.slice(0, 2),
-        path: line.slice(3),
-        staged: line[0] !== " " && line[0] !== "?"
-      }));
+      const lines = output.trim().split(/\r?\n/);
+      if (lines.length > 0) {
+        console.log("[yyDashboard] first line charCodes:", JSON.stringify([...lines[0]].map((c) => c.charCodeAt(0))));
+      }
+      const files = lines.map((line) => {
+        const cleanLine = line.replace(/^\ufeff/, "");
+        return {
+          status: cleanLine.slice(0, 2),
+          path: this.parsePorcelainPath(line),
+          staged: cleanLine[0] !== " " && cleanLine[0] !== "?"
+        };
+      });
+      console.log("[yyDashboard] getStatusFiles parsed:", JSON.stringify(files));
+      return files;
     } catch (e) {
+      console.error("[yyDashboard] getStatusFiles failed:", e.message);
       return [];
     }
   }
   async stageFiles(files) {
+    console.log(`[yyDashboard] stageFiles called with ${files.length} files:`, JSON.stringify(files));
     const staged = [];
+    const skipped = [];
     for (const f of files) {
+      if (!f || !f.trim()) {
+        console.log("[yyDashboard] Skipping empty/whitespace path");
+        continue;
+      }
       try {
         this.exec(`git add -- "${f.replace(/"/g, '\\"')}"`);
         staged.push(f);
@@ -722,29 +765,56 @@ var GitService = class {
           this.exec(`git add -A -- "${f.replace(/"/g, '\\"')}"`);
           staged.push(f);
           continue;
+        } catch (e) {
+        }
+        try {
+          this.exec(`git add -f -- "${f.replace(/"/g, '\\"')}"`);
+          staged.push(f);
+          continue;
         } catch (e3) {
           console.log(`[yyDashboard] Skipping file: "${f}", add error: ${e1.message}, rm error: ${e3.message}`);
+          skipped.push(f);
         }
       }
     }
+    console.log(`[yyDashboard] stageFiles result: staged=${staged.length}, skipped=${skipped.length}, skipped=`, JSON.stringify(skipped));
     if (staged.length === 0 && files.length > 0) {
       throw new Error("\u6CA1\u6709\u6587\u4EF6\u53EF\u4EE5\u6682\u5B58\uFF08\u6240\u6709\u6587\u4EF6\u5747\u5DF2\u4E0D\u5B58\u5728\uFF09");
     }
     return staged;
   }
   async restoreFiles(files) {
+    console.log("[yyDashboard] restoreFiles called with:", JSON.stringify(files));
     const restored = [];
     for (const f of files) {
+      let ok = false;
+      try {
+        this.exec(`git restore --staged -- "${f.replace(/"/g, '\\"')}"`);
+      } catch (e) {
+      }
       try {
         this.exec(`git restore -- "${f.replace(/"/g, '\\"')}"`);
-        restored.push(f);
+        ok = true;
       } catch (e) {
+      }
+      if (!ok) {
+        try {
+          this.exec(`git checkout HEAD -- "${f.replace(/"/g, '\\"')}"`);
+          ok = true;
+        } catch (e) {
+        }
+      }
+      if (!ok) {
         try {
           this.exec(`git checkout -- "${f.replace(/"/g, '\\"')}"`);
-          restored.push(f);
-        } catch (e2) {
-          console.log(`[yyDashboard] Failed to restore: ${f}, error: ${e2.message}`);
+          ok = true;
+        } catch (e) {
         }
+      }
+      if (ok) {
+        restored.push(f);
+      } else {
+        console.log(`[yyDashboard] Failed to restore: ${f}`);
       }
     }
     if (restored.length === 0 && files.length > 0) {
@@ -802,16 +872,30 @@ var GitService = class {
       return [];
     try {
       const output = this.exec(
-        `git log --oneline --format="%H|%s|%ai" -n ${n}`
+        `git log --oneline --format="%H|%an|%s|%ai" -n ${n}`
       );
       return output.trim().split("\n").filter(Boolean).map((line) => {
         const idx1 = line.indexOf("|");
         const idx2 = line.indexOf("|", idx1 + 1);
+        const idx3 = line.indexOf("|", idx2 + 1);
         const hash = line.slice(0, idx1);
-        const message = line.slice(idx1 + 1, idx2);
-        const date = line.slice(idx2 + 1);
-        return { hash: hash.slice(0, 7), message, date };
+        const author = line.slice(idx1 + 1, idx2);
+        const message = line.slice(idx2 + 1, idx3);
+        const date = line.slice(idx3 + 1);
+        return { hash: hash.slice(0, 7), message, date, author };
       });
+    } catch (e) {
+      return [];
+    }
+  }
+  async getCommitFiles(hash) {
+    if (this.isMobile)
+      return [];
+    try {
+      const output = this.exec(
+        `git diff-tree --no-commit-id --name-only -r ${hash}`
+      );
+      return output.trim().split("\n").filter(Boolean);
     } catch (e) {
       return [];
     }
@@ -851,7 +935,7 @@ var ModelConfigModal = class extends import_obsidian5.Modal {
     this.createNumberField(contentEl, "Temperature", "temperature", 0, 2, 0.1);
     this.createNumberField(contentEl, "Max Tokens", "maxTokens", 256, 32768, 1);
     this.createTextField(contentEl, "\u7528\u91CF\u63A5\u53E3\u5730\u5740\uFF08\u9009\u586B\uFF0C\u672A\u586B\u5219\u7528\u672C\u5730\u7EDF\u8BA1\uFF09", "tokenUsageApiUrl", "text", "https://...");
-    this.createTextField(contentEl, "\u4F59\u989D\u63A5\u53E3\u5730\u5740\uFF08\u9009\u586B\uFF0C\u5982 DeepSeek: https://api.deepseek.com/user/balance\uFF09", "tokenBalanceApiUrl", "text", "https://...");
+    this.createTextField(contentEl, "\u4F59\u989D\u63A5\u53E3\u5730\u5740\uFF08\u9009\u586B\uFF0C\u5982 DeepSeek: https://api.deepseek.com/user/balance\uFF09", "tokenBalanceApiUrl", "text", "https://...", "https://api.deepseek.com/user/balance");
     const actionsRow = contentEl.createDiv("dashboard-modal-actions");
     const testBtn = actionsRow.createEl("button", { text: "\u6D4B\u8BD5\u8FDE\u63A5", cls: "mod-cta" });
     this.statusEl = actionsRow.createDiv("dashboard-connection-status");
@@ -947,24 +1031,34 @@ var ModelConfigModal = class extends import_obsidian5.Modal {
     const items = (_a = data == null ? void 0 : data.data) != null ? _a : [];
     return items.map((m) => m.id).filter(Boolean).sort();
   }
-  createTextField(parent, label, key, type, placeholder) {
+  createTextField(parent, label, key, type, placeholder, example) {
     var _a;
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input");
+    const inputWrap = row.createDiv("dashboard-input-wrap");
+    const input = inputWrap.createEl("input");
     input.type = type;
     input.placeholder = placeholder;
     input.value = String((_a = this.settings[key]) != null ? _a : "");
     input.addEventListener("input", () => {
       this.settings[key] = input.value;
     });
+    const exampleVal = example || (placeholder && placeholder !== "https://..." && placeholder !== "sk-..." ? placeholder : "");
+    if (exampleVal) {
+      const hint = inputWrap.createEl("span", { cls: "dashboard-example-hint", text: "\u{1F4CB}", attr: { "data-tooltip": exampleVal } });
+      hint.addEventListener("click", () => {
+        input.value = exampleVal;
+        input.dispatchEvent(new Event("input"));
+      });
+    }
     return row;
   }
-  createNumberField(parent, label, key, min, max, step) {
+  createNumberField(parent, label, key, min, max, step, example) {
     var _a;
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input");
+    const inputWrap = row.createDiv("dashboard-input-wrap");
+    const input = inputWrap.createEl("input");
     input.type = "number";
     input.min = String(min);
     input.max = String(max);
@@ -973,6 +1067,13 @@ var ModelConfigModal = class extends import_obsidian5.Modal {
     input.addEventListener("input", () => {
       this.settings[key] = parseFloat(input.value);
     });
+    if (example !== void 0) {
+      const hint = inputWrap.createEl("span", { cls: "dashboard-example-hint", text: "\u{1F4CB}", attr: { "data-tooltip": String(example) } });
+      hint.addEventListener("click", () => {
+        input.value = String(example);
+        input.dispatchEvent(new Event("input"));
+      });
+    }
     return row;
   }
   onClose() {
@@ -1231,7 +1332,7 @@ var GitConfigModal = class extends import_obsidian8.Modal {
       "\u4ED3\u5E93\u5730\u5740",
       this.settings.gitRemoteURL,
       (v) => this.settings.gitRemoteURL = v.trim(),
-      "https://gitee.com/username/repo.git"
+      "https://github.com/username/repo.git"
     );
     const row1 = contentEl.createDiv("dashboard-git-config-row");
     this.createTextFieldInRow(
@@ -1251,14 +1352,14 @@ var GitConfigModal = class extends import_obsidian8.Modal {
     const row2 = contentEl.createDiv("dashboard-git-config-row");
     this.createTextFieldInRow(
       row2,
-      "Gitee \u7528\u6237\u540D",
+      "GitHub \u7528\u6237\u540D",
       this.settings.gitUsername,
       (v) => this.settings.gitUsername = v.trim(),
       "your-username"
     );
     this.createPasswordFieldInRow(
       row2,
-      "Gitee Token",
+      "GitHub Token",
       this.settings.gitPassword,
       (v) => this.settings.gitPassword = v.trim(),
       "your-token"
@@ -1287,7 +1388,7 @@ var GitConfigModal = class extends import_obsidian8.Modal {
       "auto: {{date}} {{time}}"
     );
     contentEl.createDiv({
-      text: "Token \u83B7\u53D6\u5730\u5740: https://gitee.com/profile/personal_access_tokens",
+      text: "Token \u83B7\u53D6\u5730\u5740: https://github.com/settings/tokens",
       cls: "dashboard-field-hint"
     });
     const actions = contentEl.createDiv("dashboard-modal-actions");
@@ -1310,24 +1411,28 @@ var GitConfigModal = class extends import_obsidian8.Modal {
     cb.addEventListener("change", () => onChange(cb.checked));
     toggle.createEl("span", { cls: "dashboard-toggle-slider" });
   }
-  createTextField(parent, label, value, onChange, placeholder) {
+  createTextField(parent, label, value, onChange, placeholder, example) {
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input");
+    const wrap = row.createDiv("dashboard-input-wrap");
+    const input = wrap.createEl("input");
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
     input.addEventListener("input", () => onChange(input.value));
+    this.addExampleHint(wrap, input, example != null ? example : placeholder);
   }
-  createTextFieldInRow(parent, label, value, onChange, placeholder) {
+  createTextFieldInRow(parent, label, value, onChange, placeholder, example) {
     const field = parent.createDiv("dashboard-git-config-half");
     field.createEl("label", { text: label, cls: "dashboard-git-config-label" });
-    const input = field.createEl("input");
+    const wrap = field.createDiv("dashboard-input-wrap");
+    const input = wrap.createEl("input");
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
     input.style.width = "100%";
     input.addEventListener("input", () => onChange(input.value));
+    this.addExampleHint(wrap, input, example != null ? example : placeholder);
   }
   createPasswordFieldInRow(parent, label, value, onChange, placeholder) {
     const field = parent.createDiv("dashboard-git-config-half");
@@ -1342,10 +1447,12 @@ var GitConfigModal = class extends import_obsidian8.Modal {
   createTextFieldWithPreview(parent, label, value, onChange, placeholder) {
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input");
+    const wrap = row.createDiv("dashboard-input-wrap");
+    const input = wrap.createEl("input");
     input.type = "text";
     input.placeholder = placeholder;
     input.value = value;
+    input.addEventListener("input", () => onChange(input.value));
     const preview = row.createDiv("dashboard-format-preview");
     const updatePreview = () => {
       const now = /* @__PURE__ */ new Date();
@@ -1355,9 +1462,15 @@ var GitConfigModal = class extends import_obsidian8.Modal {
       preview.textContent = `\u793A\u4F8B: ${example}`;
     };
     updatePreview();
-    input.addEventListener("input", () => {
-      onChange(input.value);
-      updatePreview();
+    this.addExampleHint(wrap, input, placeholder);
+  }
+  addExampleHint(wrap, input, example) {
+    if (!example || example === "sk-..." || example === "https://..." || example === "your-token")
+      return;
+    const hint = wrap.createEl("span", { cls: "dashboard-example-hint", text: "\u{1F4CB}", attr: { "data-tooltip": example } });
+    hint.addEventListener("click", () => {
+      input.value = example;
+      input.dispatchEvent(new Event("input"));
     });
   }
   onClose() {
@@ -1415,14 +1528,44 @@ var DashboardView = class extends import_obsidian9.ItemView {
     return "layout-dashboard";
   }
   updateSettings(settings) {
-    var _a;
     this.settings = settings;
     this.llmService.updateSettings(settings);
-    const title = this.settings.dashboardTitle || "Dashboard";
-    const titleEl = (_a = this.leaf.tabHeaderEl) == null ? void 0 : _a.querySelector(".workspace-tab-header-inner-title");
-    if (titleEl)
-      titleEl.textContent = title;
+    this.updateTabTitle();
     this.render();
+  }
+  updateTabTitle() {
+    var _a;
+    const title = this.settings.dashboardTitle || "Dashboard";
+    const viewHeaderTitle = this.containerEl.querySelector(".view-header-title");
+    if (viewHeaderTitle)
+      viewHeaderTitle.textContent = title;
+    const leafAny = this.leaf;
+    const tabTitleEl = (_a = leafAny.tabHeaderEl) == null ? void 0 : _a.querySelector(".workspace-tab-header-inner-title");
+    if (tabTitleEl) {
+      tabTitleEl.textContent = title;
+      return;
+    }
+    const leafContent = this.containerEl.closest(".workspace-leaf");
+    if (!leafContent)
+      return;
+    const workspaceTabs = leafContent.closest(".workspace-tabs");
+    if (!workspaceTabs)
+      return;
+    const tabContainer = workspaceTabs.querySelector(":scope > .workspace-tab-container");
+    const leaves = tabContainer ? Array.from(tabContainer.querySelectorAll(":scope > .workspace-leaf")) : [];
+    const leafIndex = leaves.indexOf(leafContent);
+    if (leafIndex < 0)
+      return;
+    const headerInner = workspaceTabs.querySelector(
+      ":scope > .workspace-tab-header-container > .workspace-tab-header-container-inner"
+    );
+    const tabHeaders = headerInner ? Array.from(headerInner.querySelectorAll(":scope > .workspace-tab-header")) : [];
+    const targetHeader = tabHeaders[leafIndex];
+    if (targetHeader) {
+      const innerTitle = targetHeader.querySelector(".workspace-tab-header-inner-title");
+      if (innerTitle)
+        innerTitle.textContent = title;
+    }
   }
   async onOpen() {
     this.heatmapService.startTracking();
@@ -1497,22 +1640,25 @@ var DashboardView = class extends import_obsidian9.ItemView {
     this.rendering = true;
     this.needsRerender = false;
     try {
+      document.body.querySelectorAll(".dashboard-heatmap-tip, .dashboard-popover").forEach((el) => el.remove());
       this.lastRenderTime = Date.now();
       const container = this.containerEl.children[1];
       const oldScroll = container.querySelector(".dashboard-scroll");
       const scrollTop = (_a = oldScroll == null ? void 0 : oldScroll.scrollTop) != null ? _a : 0;
+      const containerScrollTop = container.scrollTop;
       const offscreen = document.createElement("div");
       offscreen.addClass("dashboard-root");
       this.renderHeader(offscreen);
       this.renderSearch(offscreen);
       const scroll = offscreen.createDiv("dashboard-scroll");
-      this.renderModule1(scroll);
+      await this.renderModule1(scroll);
       this.renderModule5(scroll);
       this.renderModule4(scroll);
-      this.renderGitModule(scroll);
+      await this.renderGitModule(scroll);
       this.renderTaskQuickAdd(scroll);
       this.renderModule6(scroll);
       container.replaceChildren(offscreen);
+      container.scrollTop = containerScrollTop;
       scroll.scrollTop = scrollTop;
     } finally {
       this.rendering = false;
@@ -2090,7 +2236,7 @@ var DashboardView = class extends import_obsidian9.ItemView {
     } else {
       const table = body.createEl("table", { cls: "dashboard-plugin-table" });
       const hr = table.createEl("thead").createEl("tr");
-      for (const h of ["\u63D2\u4EF6\u540D\u79F0", "\u8BF4\u660E", "\u7248\u672C", "\u542F\u7528"])
+      for (const h of ["\u63D2\u4EF6\u540D\u79F0", "\u8BF4\u660E", "\u7248\u672C", "\u542F\u7528", "\u8BBE\u7F6E"])
         hr.createEl("th", { text: h });
       const tbody = table.createEl("tbody");
       for (const p of plugins) {
@@ -2122,6 +2268,15 @@ var DashboardView = class extends import_obsidian9.ItemView {
           } finally {
             cb.disabled = false;
           }
+        });
+        const settingsTd = tr.createEl("td");
+        const settingsBtn = settingsTd.createEl("button", {
+          cls: "dashboard-icon-btn",
+          title: `${p.name} \u8BBE\u7F6E`
+        });
+        settingsBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+        settingsBtn.addEventListener("click", () => {
+          this.pluginService.openSpecificPluginSettings(p.id);
         });
       }
     }
@@ -2159,7 +2314,7 @@ var DashboardView = class extends import_obsidian9.ItemView {
     const body = mod.createDiv("dashboard-module-body");
     if (!this.settings.gitEnabled) {
       body.createDiv({
-        text: "Git \u540C\u6B65\u672A\u542F\u7528\u3002\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E Gitee \u4ED3\u5E93\u4FE1\u606F\u5E76\u5F00\u542F\u540C\u6B65\u3002",
+        text: "Git \u540C\u6B65\u672A\u542F\u7528\u3002\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E GitHub \u4ED3\u5E93\u4FE1\u606F\u5E76\u5F00\u542F\u540C\u6B65\u3002",
         cls: "dashboard-git-mobile-hint"
       });
       const settingsBtn = body.createEl("button", {
@@ -2312,12 +2467,11 @@ var DashboardView = class extends import_obsidian9.ItemView {
     });
     rollbackBtn.addEventListener("click", async () => {
       const files = await this.gitService.getStatusFiles();
-      const modified = files.filter((f) => f.status[1] !== " ");
-      if (modified.length === 0) {
+      if (files.length === 0) {
         new import_obsidian9.Notice("\u6CA1\u6709\u53EF\u4EE5\u56DE\u6EDA\u7684\u53D8\u66F4");
         return;
       }
-      this.showRollbackConfirmModal(modified);
+      this.showRollbackConfirmModal(files);
     });
     const refreshBtn = actions.createEl("button", {
       text: "\u5237\u65B0\u72B6\u6001",
@@ -2348,7 +2502,10 @@ var DashboardView = class extends import_obsidian9.ItemView {
       });
       for (const c of commits) {
         const row = commitSection.createDiv("dashboard-git-commit-row");
-        row.createEl("span", { text: c.hash, cls: "dashboard-git-commit-hash" });
+        const hashEl = row.createEl("span", { text: c.hash, cls: "dashboard-git-commit-hash" });
+        hashEl.style.cursor = "pointer";
+        this.attachCommitFilePopover(hashEl, c.hash);
+        row.createEl("span", { text: c.author, cls: "dashboard-git-commit-author" });
         row.createEl("span", { text: c.message, cls: "dashboard-git-commit-msg" });
         row.createEl("span", {
           text: this.formatGitDate(c.date),
@@ -2451,6 +2608,60 @@ var DashboardView = class extends import_obsidian9.ItemView {
       popover.addEventListener("mouseleave", () => {
         hideTimer = setTimeout(remove, 200);
       });
+    };
+    trigger.addEventListener("mouseenter", show);
+    trigger.addEventListener("mouseleave", () => {
+      hideTimer = setTimeout(remove, 200);
+    });
+  }
+  attachCommitFilePopover(trigger, commitHash) {
+    let popover = null;
+    let hideTimer = null;
+    const clearTimer = () => {
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    };
+    const remove = () => {
+      clearTimer();
+      if (popover) {
+        popover.remove();
+        popover = null;
+      }
+    };
+    const show = async () => {
+      clearTimer();
+      remove();
+      popover = document.body.createDiv("dashboard-popover");
+      popover.createDiv("dashboard-popover-title").textContent = "\u52A0\u8F7D\u4E2D...";
+      const rect = trigger.getBoundingClientRect();
+      popover.style.top = `${rect.bottom + 6}px`;
+      popover.style.left = `${Math.min(rect.left, window.innerWidth - 420)}px`;
+      popover.addEventListener("mouseenter", clearTimer);
+      popover.addEventListener("mouseleave", () => {
+        hideTimer = setTimeout(remove, 200);
+      });
+      const files = await this.gitService.getCommitFiles(commitHash);
+      popover.empty();
+      popover.createDiv("dashboard-popover-title").textContent = `\u63D0\u4EA4 ${commitHash} (${files.length} \u4E2A\u6587\u4EF6)`;
+      if (files.length === 0) {
+        popover.createDiv("dashboard-popover-item").textContent = "\u65E0\u6CD5\u83B7\u53D6\u6587\u4EF6\u5217\u8868";
+      } else {
+        for (const filePath of files) {
+          const item = popover.createDiv("dashboard-popover-item");
+          item.textContent = filePath;
+          item.style.cursor = "pointer";
+          item.addEventListener("mousedown", async (e) => {
+            e.preventDefault();
+            const f = this.app.vault.getAbstractFileByPath(filePath);
+            if (f instanceof import_obsidian9.TFile) {
+              await this.app.workspace.getLeaf(false).openFile(f);
+            }
+            remove();
+          });
+        }
+      }
     };
     trigger.addEventListener("mouseenter", show);
     trigger.addEventListener("mouseleave", () => {
@@ -3033,24 +3244,27 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Dashboard \u8BBE\u7F6E" });
-    new import_obsidian10.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
+    const setting1 = new import_obsidian10.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
       (text) => text.setPlaceholder("Dashboard").setValue(this.plugin.settings.dashboardTitle).onChange(async (value) => {
         this.plugin.settings.dashboardTitle = value.trim() || "Dashboard";
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
+    this.addExampleHint(setting1, "Dashboard");
+    const setting2 = new import_obsidian10.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
       (text) => text.setPlaceholder("\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F").setValue(this.plugin.settings.dashboardDesc).onChange(async (value) => {
         this.plugin.settings.dashboardDesc = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
+    this.addExampleHint(setting2, "\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F");
+    const setting3 = new import_obsidian10.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
       (text) => text.setPlaceholder("https://api.openai.com/v1").setValue(this.plugin.settings.apiBaseUrl).onChange(async (value) => {
         this.plugin.settings.apiBaseUrl = value;
         await this.plugin.saveSettings();
       })
     );
+    this.addExampleHint(setting3, "https://api.openai.com/v1");
     new import_obsidian10.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5").addText((text) => {
       text.setPlaceholder("sk-...").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
         this.plugin.settings.apiKey = value;
@@ -3058,12 +3272,13 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
       });
       text.inputEl.type = "password";
     });
-    new import_obsidian10.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
+    const setting4 = new import_obsidian10.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
       (text) => text.setPlaceholder("gpt-4o").setValue(this.plugin.settings.modelName).onChange(async (value) => {
         this.plugin.settings.modelName = value;
         await this.plugin.saveSettings();
       })
     );
+    this.addExampleHint(setting4, "gpt-4o");
     new import_obsidian10.Setting(containerEl).setName("Temperature").addSlider(
       (slider) => slider.setLimits(0, 2, 0.1).setValue(this.plugin.settings.temperature).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.temperature = value;
@@ -3085,12 +3300,13 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
+    const setting5 = new import_obsidian10.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
       (text) => text.setPlaceholder("https://...").setValue(this.plugin.settings.tokenBalanceApiUrl).onChange(async (value) => {
         this.plugin.settings.tokenBalanceApiUrl = value;
         await this.plugin.saveSettings();
       })
     );
+    this.addExampleHint(setting5, "https://api.deepseek.com/user/balance");
     new import_obsidian10.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
       (text) => text.setValue(this.plugin.settings.trackedFolders.join(", ")).onChange(async (value) => {
         this.plugin.settings.trackedFolders = value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -3139,38 +3355,42 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
         })
       );
     }
-    containerEl.createEl("h3", { text: "Git \u540C\u6B65 (Gitee)" });
+    containerEl.createEl("h3", { text: "Git \u540C\u6B65 (GitHub)" });
     new import_obsidian10.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.gitEnabled).onChange(async (value) => {
         this.plugin.settings.gitEnabled = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("Gitee \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://gitee.com/username/repo.git").addText(
-      (text) => text.setPlaceholder("https://gitee.com/username/repo.git").setValue(this.plugin.settings.gitRemoteURL).onChange(async (value) => {
+    const setting6 = new import_obsidian10.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
+      (text) => text.setPlaceholder("https://github.com/username/repo.git").setValue(this.plugin.settings.gitRemoteURL).onChange(async (value) => {
         this.plugin.settings.gitRemoteURL = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
+    this.addExampleHint(setting6, "https://github.com/username/repo.git");
+    const setting7 = new import_obsidian10.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
       (text) => text.setPlaceholder("origin").setValue(this.plugin.settings.gitRemoteName).onChange(async (value) => {
         this.plugin.settings.gitRemoteName = value.trim() || "origin";
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
+    this.addExampleHint(setting7, "origin");
+    const setting8 = new import_obsidian10.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
       (text) => text.setPlaceholder("main").setValue(this.plugin.settings.gitBranchName).onChange(async (value) => {
         this.plugin.settings.gitBranchName = value.trim() || "main";
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Gitee \u7528\u6237\u540D").setDesc("Gitee \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
+    this.addExampleHint(setting8, "main");
+    const setting9 = new import_obsidian10.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
       (text) => text.setPlaceholder("your-username").setValue(this.plugin.settings.gitUsername).onChange(async (value) => {
         this.plugin.settings.gitUsername = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Gitee Token").setDesc("Gitee \u79C1\u4EBA\u4EE4\u724C\uFF08https://gitee.com/profile/personal_access_tokens\uFF09\uFF0C\u5B58\u50A8\u4E8E\u672C\u5730 data.json \u4E2D").addText((text) => {
+    this.addExampleHint(setting9, "your-username");
+    new import_obsidian10.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\uFF0C\u5B58\u50A8\u4E8E\u672C\u5730 data.json \u4E2D").addText((text) => {
       text.setPlaceholder("your-token").setValue(this.plugin.settings.gitPassword).onChange(async (value) => {
         this.plugin.settings.gitPassword = value.trim();
         await this.plugin.saveSettings();
@@ -3183,7 +3403,7 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
+    const setting10 = new import_obsidian10.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
       (text) => text.setPlaceholder("30").setValue(String(this.plugin.settings.gitAutoPushInterval)).onChange(async (value) => {
         const n = parseInt(value);
         if (!isNaN(n) && n >= 0) {
@@ -3192,11 +3412,24 @@ var DashboardSettingTab = class extends import_obsidian10.PluginSettingTab {
         }
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
+    this.addExampleHint(setting10, "30");
+    const setting11 = new import_obsidian10.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
       (text) => text.setPlaceholder("auto: {{date}} {{time}}").setValue(this.plugin.settings.gitCommitTemplate).onChange(async (value) => {
         this.plugin.settings.gitCommitTemplate = value.trim();
         await this.plugin.saveSettings();
       })
     );
+    this.addExampleHint(setting11, "auto: {{date}} {{time}}");
+  }
+  addExampleHint(setting, example) {
+    const input = setting.controlEl.querySelector("input");
+    if (!input)
+      return;
+    const hint = createSpan({ cls: "dashboard-example-hint", text: "\u{1F4CB}", attr: { "data-tooltip": example } });
+    hint.addEventListener("click", () => {
+      input.value = example;
+      input.dispatchEvent(new Event("input"));
+    });
+    setting.controlEl.appendChild(hint);
   }
 };

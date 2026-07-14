@@ -37,7 +37,7 @@ export class ModelConfigModal extends Modal {
     this.createNumberField(contentEl, "Temperature", "temperature", 0, 2, 0.1);
     this.createNumberField(contentEl, "Max Tokens", "maxTokens", 256, 32768, 1);
     this.createTextField(contentEl, "用量接口地址（选填，未填则用本地统计）", "tokenUsageApiUrl", "text", "https://...");
-    this.createTextField(contentEl, "余额接口地址（选填，如 DeepSeek: https://api.deepseek.com/user/balance）", "tokenBalanceApiUrl", "text", "https://...");
+    this.createTextField(contentEl, "余额接口地址（选填，如 DeepSeek: https://api.deepseek.com/user/balance）", "tokenBalanceApiUrl", "text", "https://...", "https://api.deepseek.com/user/balance");
 
     const actionsRow = contentEl.createDiv("dashboard-modal-actions");
     const testBtn = actionsRow.createEl("button", { text: "测试连接", cls: "mod-cta" });
@@ -153,17 +153,28 @@ export class ModelConfigModal extends Modal {
     label: string,
     key: keyof DashboardSettings,
     type: string,
-    placeholder: string
+    placeholder: string,
+    example?: string
   ): HTMLElement {
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input") as HTMLInputElement;
+    const inputWrap = row.createDiv("dashboard-input-wrap");
+    const input = inputWrap.createEl("input") as HTMLInputElement;
     input.type = type;
     input.placeholder = placeholder;
     input.value = String(this.settings[key] ?? "");
     input.addEventListener("input", () => {
       (this.settings as any)[key] = input.value;
     });
+    // Clickable example hint
+    const exampleVal = example || (placeholder && placeholder !== "https://..." && placeholder !== "sk-..." ? placeholder : "");
+    if (exampleVal) {
+      const hint = inputWrap.createEl("span", { cls: "dashboard-example-hint", text: "📋", attr: { "data-tooltip": exampleVal } });
+      hint.addEventListener("click", () => {
+        input.value = exampleVal;
+        input.dispatchEvent(new Event("input"));
+      });
+    }
     return row;
   }
 
@@ -173,11 +184,13 @@ export class ModelConfigModal extends Modal {
     key: keyof DashboardSettings,
     min: number,
     max: number,
-    step: number
+    step: number,
+    example?: number
   ): HTMLElement {
     const row = parent.createDiv("dashboard-field");
     row.createEl("label", { text: label });
-    const input = row.createEl("input") as HTMLInputElement;
+    const inputWrap = row.createDiv("dashboard-input-wrap");
+    const input = inputWrap.createEl("input") as HTMLInputElement;
     input.type = "number";
     input.min = String(min);
     input.max = String(max);
@@ -186,6 +199,13 @@ export class ModelConfigModal extends Modal {
     input.addEventListener("input", () => {
       (this.settings as any)[key] = parseFloat(input.value);
     });
+    if (example !== undefined) {
+      const hint = inputWrap.createEl("span", { cls: "dashboard-example-hint", text: "📋", attr: { "data-tooltip": String(example) } });
+      hint.addEventListener("click", () => {
+        input.value = String(example);
+        input.dispatchEvent(new Event("input"));
+      });
+    }
     return row;
   }
 

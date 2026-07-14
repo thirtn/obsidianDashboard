@@ -33,7 +33,7 @@ export class PluginManageService {
         name: manifest.name ?? id,
         version: manifest.version ?? "?",
         enabled: isEnabled(id),
-        hasSettings: !!(plugins.plugins?.[id]?.settingsDisplay || plugins.plugins?.[id]?.onSettingsTab),
+        hasSettings: true,
         description: ZH_DESCRIPTIONS[id] ?? manifest.description ?? "",
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -55,7 +55,23 @@ export class PluginManageService {
   }
 
   openSpecificPluginSettings(pluginId: string): void {
-    (this.app as any).setting?.open?.();
-    (this.app as any).setting?.openTabById?.(pluginId);
+    const setting = (this.app as any).setting;
+    if (!setting) return;
+
+    // Open settings modal
+    setting.open();
+
+    // After modal renders, switch to the target plugin's settings tab
+    setTimeout(() => {
+      // Try openTabById first
+      if (typeof setting.openTabById === "function") {
+        setting.openTabById(pluginId);
+      }
+      // Also try direct nav click (more reliable across Obsidian versions)
+      const tab = setting.settingTabs?.find(
+        (t: any) => t.id === pluginId || t.plugin?.manifest?.id === pluginId
+      );
+      tab?.navEl?.click();
+    }, 150);
   }
 }
