@@ -213,6 +213,46 @@
   margin-top: 1px;
 }
 
+.dashboard-search-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-search-result-type {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.dashboard-search-type-file {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.dashboard-search-type-title {
+  background: color-mix(in srgb, var(--color-blue) 15%, transparent);
+  color: var(--color-blue);
+}
+
+.dashboard-search-type-alias {
+  background: color-mix(in srgb, var(--color-cyan) 15%, transparent);
+  color: var(--color-cyan);
+}
+
+.dashboard-search-type-tag {
+  background: color-mix(in srgb, var(--color-green) 15%, transparent);
+  color: var(--color-green);
+}
+
+.dashboard-search-type-fuzzy {
+  background: var(--background-modifier-border);
+  color: var(--text-faint);
+}
+
 /* ─── Module 1: File Stats ──────────────────────────────────────────────── */
 .dashboard-stat-total {
   display: flex;
@@ -1649,4 +1689,28 @@
 .dashboard-sync-file-item:hover {
   border-left-color: var(--text-accent);
   color: var(--text-normal);
+}
+
+/* ─── Drag & Drop Module Reordering ─────────────────────────────────────── */
+
+.dashboard-module-drag-handle {
+  cursor: grab;
+  color: var(--text-faint);
+  font-size: 14px;
+  margin-right: 8px;
+  user-select: none;
+  line-height: 1;
+  letter-spacing: -2px;
+}
+
+.dashboard-module-drag-handle:hover {
+  color: var(--text-muted);
+}
+
+.dashboard-module.dragging {
+  opacity: 0.4;
+}
+
+.dashboard-module.drag-over {
+  border-top: 2px solid var(--interactive-accent);
 }

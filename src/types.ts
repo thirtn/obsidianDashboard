@@ -1,20 +1,3 @@
-export interface DashboardSettings {
-  // LLM config
-  apiBaseUrl: string;
-  apiKey: string;
-  modelName: string;
-  temperature: number;
-  maxTokens: number;
-  // Token usage
-  tokenUsageApiUrl: string;
-  tokenBalanceApiUrl: string;
-  // Folder stats config
-  trackedFolders: string[];
-  // Last connection test result
-  lastConnectionStatus: "ok" | "error" | "untested";
-  lastConnectionTime: string;
-}
-
 export interface FolderStat {
   name: string;
   count: number;
@@ -128,6 +111,11 @@ export interface DashboardSettings {
   gitAutoPushEnabled: boolean;
   gitAutoPushInterval: number;
   gitCommitTemplate: string;
+  // Module order (drag-and-drop)
+  moduleOrder: string[];
+  // Vault persistence paths
+  heatmapDataPath: string;
+  tokenUsageDataPath: string;
 }
 
 export interface TaskDefaults {
@@ -170,4 +158,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
   gitAutoPushEnabled: false,
   gitAutoPushInterval: 30,
   gitCommitTemplate: "auto: {{date}} {{time}}",
+  moduleOrder: ["file-stats", "heatmap", "llm-command", "git-sync", "remotely-save", "task-quickadd", "plugin-manage"],
+  heatmapDataPath: ".dashboard/heatmap.json",
+  tokenUsageDataPath: ".dashboard/token-usage.json",
 };

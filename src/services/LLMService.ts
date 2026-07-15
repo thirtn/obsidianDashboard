@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import { DashboardSettings, TokenUsage, TokenDay, BalanceItem } from "../types";
+import { VaultPersistenceService } from "./VaultPersistenceService";
 
 const LOCAL_STORAGE_KEY = "llm-wiki-dashboard-token-usage";
 
@@ -8,7 +9,21 @@ interface LocalTokenStore {
 }
 
 export class LLMService {
-  constructor(private settings: DashboardSettings) {}
+  private persistence: VaultPersistenceService;
+  private vaultPath: string;
+
+  constructor(
+    private settings: DashboardSettings,
+    vaultPath?: string
+  ) {
+    this.persistence = new VaultPersistenceService(null as any); // Will be set properly
+    this.vaultPath = vaultPath || ".dashboard/token-usage.json";
+  }
+
+  /** Must be called after construction to wire up the vault adapter */
+  setApp(app: any) {
+    this.persistence = new VaultPersistenceService(app);
+  }
 
   updateSettings(settings: DashboardSettings) {
     this.settings = settings;
@@ -77,7 +92,7 @@ export class LLMService {
     const hasUsageApi = !!this.settings.tokenUsageApiUrl;
     const hasBalanceApi = !!this.settings.tokenBalanceApiUrl;
 
-    const localUsage = this.getLocalTokenUsage();
+    const localUsage = await this.getLocalTokenUsage();
 
     const [apiUsage, balanceInfo] = await Promise.all([
       hasUsageApi ? this.fetchUsageApi() : null,
@@ -93,8 +108,29 @@ export class LLMService {
     };
   }
 
-  private getLocalTokenUsage(): Omit<TokenUsage, "balanceInfo"> {
-    const store = this.loadLocalStore();
+  private async getLocalTokenUsage(): Promise<Omit<TokenUsage, "balanceInfo">> {
+    // Try vault file first
+    const vaultData = await this.persistence.readJSON<LocalTokenStore>(this.vaultPath);
+    const localData = this.loadLocalStoreSync();
+
+    let store = vaultData ?? localData;
+
+    // Migrate: merge localStorage into vault data, then persist
+    if (!vaultData && Object.keys(localData).length > 0) {
+      this.persistence.writeJSON(this.vaultPath, localData).catch(() => {});
+    } else if (vaultData) {
+      let merged = false;
+      for (const [date, tokens] of Object.entries(localData)) {
+        if (!(date in vaultData) || localData[date] > (vaultData[date] ?? 0)) {
+          store[date] = tokens;
+          merged = true;
+        }
+      }
+      if (merged) {
+        this.persistence.writeJSON(this.vaultPath, store).catch(() => {});
+      }
+    }
+
     const today = this.todayStr();
     const monthPrefix = today.slice(0, 7);
 
@@ -142,9 +178,7 @@ export class LLMService {
       });
       if (resp.status !== 200) return null;
       const data = resp.json;
-      // DeepSeek format
       if (data?.balance_infos) return data.balance_infos;
-      // Generic: { currency, total_balance, ... }
       if (data?.currency) return [data];
       return null;
     } catch {
@@ -153,13 +187,18 @@ export class LLMService {
   }
 
   recordLocalTokens(tokens: number) {
-    const store = this.loadLocalStore();
+    const store = this.loadLocalStoreSync();
     const today = this.todayStr();
     store[today] = (store[today] ?? 0) + tokens;
+
+    // Write to localStorage (sync)
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(store));
+
+    // Write to vault (async, fire-and-forget)
+    this.persistence.writeJSON(this.vaultPath, store).catch(() => {});
   }
 
-  private loadLocalStore(): LocalTokenStore {
+  private loadLocalStoreSync(): LocalTokenStore {
     try {
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
       return raw ? JSON.parse(raw) : {};
@@ -170,6 +209,6 @@ export class LLMService {
 
   private todayStr(): string {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 }
