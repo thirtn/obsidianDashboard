@@ -26,8 +26,9 @@ export class HeatmapComponent extends BaseComponent {
   async render(container: HTMLElement): Promise<void> {
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "🗓 工作热力图", cls: "dashboard-module-title" });
+    const hmTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    hmTitleWrap.createEl("span", { text: "🗓", cls: "dashboard-module-icon" });
+    hmTitleWrap.createEl("span", { text: "工作热力图", cls: "dashboard-module-title" });
 
     const yearNav = header.createDiv("dashboard-heatmap-year-nav");
     const prevBtn = yearNav.createEl("span", { text: "◀", cls: "dashboard-heatmap-year-arrow" });

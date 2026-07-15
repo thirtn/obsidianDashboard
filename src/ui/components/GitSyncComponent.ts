@@ -30,14 +30,18 @@ export class GitSyncComponent extends BaseComponent {
   async render(container: HTMLElement): Promise<void> {
     const mod = container.createDiv("dashboard-module");
     mod.id = "dashboard-git-module";
-    await this.buildContent(mod);
+    this.buildHeader(mod);
+    const body = mod.createDiv("dashboard-module-body");
+    await this.buildBodyContent(body);
   }
 
   async update(): Promise<void> {
     const mod = document.getElementById("dashboard-git-module");
     if (!mod) return;
-    mod.empty();
-    await this.buildContent(mod);
+    const existingBody = mod.querySelector(".dashboard-module-body");
+    if (existingBody) existingBody.remove();
+    const body = mod.createDiv("dashboard-module-body");
+    await this.buildBodyContent(body);
   }
 
   startPolling() {
@@ -87,12 +91,11 @@ export class GitSyncComponent extends BaseComponent {
 
   // ── Internal ──
 
-  private async buildContent(mod: HTMLElement) {
+  private buildHeader(mod: HTMLElement) {
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    const titleWrap = header.createDiv();
-    titleWrap.style.cssText = "display:flex;align-items:center;gap:8px;";
-    titleWrap.createEl("span", { text: "🔗 Git 同步", cls: "dashboard-module-title" });
+    const titleWrap = header.createDiv("dashboard-module-title-wrap");
+    titleWrap.createEl("span", { text: "🔗", cls: "dashboard-module-icon" });
+    titleWrap.createEl("span", { text: "Git 同步", cls: "dashboard-module-title" });
 
     const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "Git 同步配置" });
     gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
@@ -104,9 +107,9 @@ export class GitSyncComponent extends BaseComponent {
         await this.update();
       }).open();
     });
+  }
 
-    const body = mod.createDiv("dashboard-module-body");
-
+  private async buildBodyContent(body: HTMLElement) {
     if (!this.settings.gitEnabled) {
       body.createDiv({
         text: "Git 同步未启用。请在设置中配置 GitHub 仓库信息并开启同步。",

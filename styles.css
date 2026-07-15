@@ -124,15 +124,27 @@
 }
 
 .dashboard-module-header {
+  display: flex;
+  align-items: center;
   padding: 8px 12px;
   background: var(--background-secondary-alt);
   border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.dashboard-module-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .dashboard-module-title {
   font-weight: 600;
   font-size: var(--font-ui-small);
   color: var(--text-normal);
+}
+
+.dashboard-module-icon {
+  font-size: var(--font-ui-small);
 }
 
 .dashboard-module-badge {
@@ -661,6 +673,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 
 .dashboard-heatmap-config-btn {
@@ -674,7 +687,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-left: 2px;
+  margin-left: auto;
 }
 
 .dashboard-heatmap-config-btn:hover {

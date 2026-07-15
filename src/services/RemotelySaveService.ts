@@ -31,6 +31,27 @@ export class RemotelySaveService {
     });
   }
 
+  async getTotalSyncCount(): Promise<number> {
+    let db: IDBDatabase | null = null;
+    try {
+      db = await this.openDB();
+    } catch {
+      return 0;
+    }
+    return new Promise((resolve) => {
+      try {
+        const tx = db!.transaction(this.storeName, "readonly");
+        const store = tx.objectStore(this.storeName);
+        const countReq = store.count();
+        countReq.onsuccess = () => resolve(countReq.result);
+        countReq.onerror = () => resolve(0);
+        tx.onerror = () => resolve(0);
+      } catch {
+        resolve(0);
+      }
+    });
+  }
+
   async getSyncHistory(limit: number = 10): Promise<SyncSession[]> {
     let db: IDBDatabase | null = null;
     try {

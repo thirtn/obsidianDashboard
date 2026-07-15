@@ -1056,6 +1056,26 @@ var RemotelySaveService = class {
       }
     });
   }
+  async getTotalSyncCount() {
+    let db = null;
+    try {
+      db = await this.openDB();
+    } catch (e) {
+      return 0;
+    }
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(this.storeName, "readonly");
+        const store = tx.objectStore(this.storeName);
+        const countReq = store.count();
+        countReq.onsuccess = () => resolve(countReq.result);
+        countReq.onerror = () => resolve(0);
+        tx.onerror = () => resolve(0);
+      } catch (e) {
+        resolve(0);
+      }
+    });
+  }
   async getSyncHistory(limit = 10) {
     let db = null;
     try {
@@ -1825,9 +1845,11 @@ var FileStatsComponent = class extends BaseComponent {
   async render(container) {
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "\u{1F4C1} \u6587\u4EF6\u7EDF\u8BA1", cls: "dashboard-module-title" });
+    const fsTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    fsTitleWrap.createEl("span", { text: "\u{1F4C1}", cls: "dashboard-module-icon" });
+    fsTitleWrap.createEl("span", { text: "\u6587\u4EF6\u7EDF\u8BA1", cls: "dashboard-module-title" });
     const addBtn = header.createEl("button", { cls: "dashboard-icon-btn", title: "\u589E\u52A0\u6587\u4EF6\u7EDF\u8BA1" });
+    addBtn.style.marginLeft = "auto";
     addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
     addBtn.addEventListener("click", () => {
       new FolderConfigModal(this.app, this.settings, this.fileService, async (s) => {
@@ -2109,8 +2131,9 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
     var _a;
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "\u{1F5D3} \u5DE5\u4F5C\u70ED\u529B\u56FE", cls: "dashboard-module-title" });
+    const hmTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    hmTitleWrap.createEl("span", { text: "\u{1F5D3}", cls: "dashboard-module-icon" });
+    hmTitleWrap.createEl("span", { text: "\u5DE5\u4F5C\u70ED\u529B\u56FE", cls: "dashboard-module-title" });
     const yearNav = header.createDiv("dashboard-heatmap-year-nav");
     const prevBtn = yearNav.createEl("span", { text: "\u25C0", cls: "dashboard-heatmap-year-arrow" });
     const yearLabel = yearNav.createEl("span", { text: String(this.currentYear), cls: "dashboard-heatmap-year-label clickable" });
@@ -2339,10 +2362,10 @@ var LLMCommandComponent = class extends BaseComponent {
   }
   async render(container) {
     const mod = container.createDiv("dashboard-module");
-    mod.createDiv("dashboard-module-header").createEl("span", {
-      text: "\u26A1 LLM \u6307\u4EE4\u6267\u884C",
-      cls: "dashboard-module-title"
-    });
+    const llmHeader = mod.createDiv("dashboard-module-header");
+    const llmTitleWrap = llmHeader.createDiv("dashboard-module-title-wrap");
+    llmTitleWrap.createEl("span", { text: "\u26A1", cls: "dashboard-module-icon" });
+    llmTitleWrap.createEl("span", { text: "LLM \u6307\u4EE4\u6267\u884C", cls: "dashboard-module-title" });
     const body = mod.createDiv("dashboard-module-body");
     const commandSelect = body.createEl("select", { cls: "dashboard-select" });
     for (const cmd of ["query", "ingest", "lint-wiki"]) {
@@ -2608,14 +2631,19 @@ var GitSyncComponent = class extends BaseComponent {
   async render(container) {
     const mod = container.createDiv("dashboard-module");
     mod.id = "dashboard-git-module";
-    await this.buildContent(mod);
+    this.buildHeader(mod);
+    const body = mod.createDiv("dashboard-module-body");
+    await this.buildBodyContent(body);
   }
   async update() {
     const mod = document.getElementById("dashboard-git-module");
     if (!mod)
       return;
-    mod.empty();
-    await this.buildContent(mod);
+    const existingBody = mod.querySelector(".dashboard-module-body");
+    if (existingBody)
+      existingBody.remove();
+    const body = mod.createDiv("dashboard-module-body");
+    await this.buildBodyContent(body);
   }
   startPolling() {
     this.stopPolling();
@@ -2668,12 +2696,11 @@ var GitSyncComponent = class extends BaseComponent {
     }
   }
   // ── Internal ──
-  async buildContent(mod) {
+  buildHeader(mod) {
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    const titleWrap = header.createDiv();
-    titleWrap.style.cssText = "display:flex;align-items:center;gap:8px;";
-    titleWrap.createEl("span", { text: "\u{1F517} Git \u540C\u6B65", cls: "dashboard-module-title" });
+    const titleWrap = header.createDiv("dashboard-module-title-wrap");
+    titleWrap.createEl("span", { text: "\u{1F517}", cls: "dashboard-module-icon" });
+    titleWrap.createEl("span", { text: "Git \u540C\u6B65", cls: "dashboard-module-title" });
     const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "Git \u540C\u6B65\u914D\u7F6E" });
     gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
     gearBtn.addEventListener("click", () => {
@@ -2684,7 +2711,8 @@ var GitSyncComponent = class extends BaseComponent {
         await this.update();
       }).open();
     });
-    const body = mod.createDiv("dashboard-module-body");
+  }
+  async buildBodyContent(body) {
     if (!this.settings.gitEnabled) {
       body.createDiv({
         text: "Git \u540C\u6B65\u672A\u542F\u7528\u3002\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u914D\u7F6E GitHub \u4ED3\u5E93\u4FE1\u606F\u5E76\u5F00\u542F\u540C\u6B65\u3002",
@@ -3185,15 +3213,20 @@ var RemotelySaveComponent = class extends BaseComponent {
     const mod = container.createDiv("dashboard-module");
     mod.id = "dashboard-remotely-save-module";
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "\u2601\uFE0F OneDrive \u540C\u6B65", cls: "dashboard-module-title" });
+    const rsTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    rsTitleWrap.createEl("span", { text: "\u2601\uFE0F", cls: "dashboard-module-icon" });
+    rsTitleWrap.createEl("span", { text: "OneDrive \u540C\u6B65", cls: "dashboard-module-title" });
     const body = mod.createDiv("dashboard-module-body dashboard-sync-body");
-    const sessions = await this.remotelySaveService.getSyncHistory(7);
+    const days = 7;
+    const [sessions, totalCount] = await Promise.all([
+      this.remotelySaveService.getSyncHistory(days),
+      this.remotelySaveService.getTotalSyncCount()
+    ]);
     if (sessions.length === 0) {
       body.createDiv({ text: "\u6682\u65E0 Remotely Save \u540C\u6B65\u8BB0\u5F55", cls: "dashboard-git-mobile-hint" });
       return;
     }
-    header.createEl("span", { text: `${sessions.length} \u6B21\u540C\u6B65`, cls: "dashboard-module-badge" });
+    header.createEl("span", { text: `\u5171 ${totalCount} \u6B21\u540C\u6B65`, cls: "dashboard-module-badge" });
     const sessionList = body.createDiv("dashboard-sync-session-list");
     for (const session of sessions) {
       const sessionBlock = sessionList.createDiv("dashboard-sync-session");
@@ -3272,8 +3305,9 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
     const td = this.settings.taskDefaults;
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "\u{1F4DD} \u5FEB\u901F\u6DFB\u52A0\u4EFB\u52A1", cls: "dashboard-module-title" });
+    const tqTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    tqTitleWrap.createEl("span", { text: "\u{1F4DD}", cls: "dashboard-module-icon" });
+    tqTitleWrap.createEl("span", { text: "\u5FEB\u901F\u6DFB\u52A0\u4EFB\u52A1", cls: "dashboard-module-title" });
     const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "\u914D\u7F6E\u9ED8\u8BA4\u5185\u5BB9" });
     gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
     gearBtn.addEventListener("click", () => this.openTaskDefaultsModal());
@@ -3515,8 +3549,9 @@ var PluginManageComponent = class extends BaseComponent {
   async render(container) {
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "\u{1F50C} \u63D2\u4EF6\u7BA1\u7406", cls: "dashboard-module-title" });
+    const pmTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    pmTitleWrap.createEl("span", { text: "\u{1F50C}", cls: "dashboard-module-icon" });
+    pmTitleWrap.createEl("span", { text: "\u63D2\u4EF6\u7BA1\u7406", cls: "dashboard-module-title" });
     const gearBtn = header.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "Obsidian \u63D2\u4EF6\u8BBE\u7F6E" });
     gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
     gearBtn.addEventListener("click", () => this.pluginService.openPluginSettings());

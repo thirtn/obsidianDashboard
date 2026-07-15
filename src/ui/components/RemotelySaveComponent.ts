@@ -33,18 +33,23 @@ export class RemotelySaveComponent extends BaseComponent {
     mod.id = "dashboard-remotely-save-module";
 
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "☁️ OneDrive 同步", cls: "dashboard-module-title" });
+    const rsTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    rsTitleWrap.createEl("span", { text: "☁️", cls: "dashboard-module-icon" });
+    rsTitleWrap.createEl("span", { text: "OneDrive 同步", cls: "dashboard-module-title" });
 
     const body = mod.createDiv("dashboard-module-body dashboard-sync-body");
-    const sessions = await this.remotelySaveService.getSyncHistory(7);
+    const days = 7;
+    const [sessions, totalCount] = await Promise.all([
+      this.remotelySaveService.getSyncHistory(days),
+      this.remotelySaveService.getTotalSyncCount(),
+    ]);
 
     if (sessions.length === 0) {
       body.createDiv({ text: "暂无 Remotely Save 同步记录", cls: "dashboard-git-mobile-hint" });
       return;
     }
 
-    header.createEl("span", { text: `${sessions.length} 次同步`, cls: "dashboard-module-badge" });
+    header.createEl("span", { text: `共 ${totalCount} 次同步`, cls: "dashboard-module-badge" });
     const sessionList = body.createDiv("dashboard-sync-session-list");
 
     for (const session of sessions) {

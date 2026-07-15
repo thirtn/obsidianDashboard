@@ -26,10 +26,10 @@ export class LLMCommandComponent extends BaseComponent {
 
   async render(container: HTMLElement): Promise<void> {
     const mod = container.createDiv("dashboard-module");
-    mod.createDiv("dashboard-module-header").createEl("span", {
-      text: "⚡ LLM 指令执行",
-      cls: "dashboard-module-title",
-    });
+    const llmHeader = mod.createDiv("dashboard-module-header");
+    const llmTitleWrap = llmHeader.createDiv("dashboard-module-title-wrap");
+    llmTitleWrap.createEl("span", { text: "⚡", cls: "dashboard-module-icon" });
+    llmTitleWrap.createEl("span", { text: "LLM 指令执行", cls: "dashboard-module-title" });
     const body = mod.createDiv("dashboard-module-body");
 
     const commandSelect = body.createEl("select", { cls: "dashboard-select" }) as HTMLSelectElement;

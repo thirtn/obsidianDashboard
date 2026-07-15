@@ -20,9 +20,11 @@ export class FileStatsComponent extends BaseComponent {
   async render(container: HTMLElement): Promise<void> {
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    header.createEl("span", { text: "📁 文件统计", cls: "dashboard-module-title" });
+    const fsTitleWrap = header.createDiv("dashboard-module-title-wrap");
+    fsTitleWrap.createEl("span", { text: "📁", cls: "dashboard-module-icon" });
+    fsTitleWrap.createEl("span", { text: "文件统计", cls: "dashboard-module-title" });
     const addBtn = header.createEl("button", { cls: "dashboard-icon-btn", title: "增加文件统计" });
+    addBtn.style.marginLeft = "auto";
     addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
     addBtn.addEventListener("click", () => {
       new FolderConfigModal(this.app, this.settings, this.fileService, async (s) => {
