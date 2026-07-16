@@ -225,11 +225,11 @@ export class HeatmapComponent extends BaseComponent {
           this.contentEl.createEl("p", { text: `${name}不存在，是否新建？` });
           this.contentEl.createEl("p", { text: path, cls: "dashboard-field-hint" });
           const btns = this.contentEl.createDiv("dashboard-confirm-btns");
+          btns.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
           btns.createEl("button", { text: "新建", cls: "mod-cta" }).addEventListener("click", async () => {
             this.close();
             try { await doCreate(); } catch (e: any) { new Notice(`创建失败: ${e.message}`); }
           });
-          btns.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
         }
         onClose() { this.contentEl.empty(); }
       })(this.app).open();

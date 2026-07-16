@@ -55,6 +55,7 @@ export class DashboardView extends ItemView {
   private visibilityTimer: ReturnType<typeof setInterval> | null = null;
   private onVaultChange?: (file: any) => void;
   private onActiveLeafChange?: (leaf: WorkspaceLeaf) => void;
+  private gitRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly AUTO_REFRESH_COOLDOWN = 5 * 60 * 1000;
   private readonly VISIBILITY_CHECK_INTERVAL = 30 * 60 * 1000;
@@ -192,9 +193,12 @@ export class DashboardView extends ItemView {
         if (recentContainer) this.fileStatsComponent.renderRecentFiles(recentContainer);
       }, 800);
 
-      // Refresh git on vault change
+      // Refresh git on vault change (debounced to avoid excessive calls)
       if (this.settings.gitEnabled) {
-        this.gitSyncComponent.update();
+        if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer);
+        this.gitRefreshTimer = setTimeout(() => {
+          this.gitSyncComponent.update();
+        }, 3000);
       }
 
       // Auto-push on vault change (when interval === 0)
@@ -248,6 +252,7 @@ export class DashboardView extends ItemView {
       this.app.workspace.off("active-leaf-change", this.onActiveLeafChange);
     }
     if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
+    if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer);
     if (this.visibilityTimer) clearInterval(this.visibilityTimer);
 
     // Destroy components that hold timers

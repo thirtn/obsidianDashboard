@@ -172,7 +172,12 @@ export class GitSyncComponent extends BaseComponent {
     }
 
     let status = { clean: true, files: [] as string[], ahead: 0, behind: 0 };
-    try { status = await this.gitService.getStatus(); } catch { /* ignore */ }
+    try {
+      status = await this.gitService.getStatus(
+        this.settings.gitRemoteName || undefined,
+        this.settings.gitBranchName || undefined
+      );
+    } catch { /* ignore */ }
 
     // Status row
     const statusRow = body.createDiv("dashboard-git-status");
@@ -293,8 +298,10 @@ export class GitSyncComponent extends BaseComponent {
         this.settings.gitUsername || undefined, this.settings.gitPassword || undefined
       );
       console.log("[yyDashboard] Auto push completed");
+      new Notice("自动推送成功");
     } catch (e: any) {
       console.log(`[yyDashboard] Auto push failed: ${e.message}`);
+      new Notice(`自动推送失败: ${e.message}`);
     }
   }
 
@@ -451,27 +458,59 @@ export class GitSyncComponent extends BaseComponent {
         }
 
         const actions = contentEl.createDiv("dashboard-modal-actions");
-        actions.style.cssText = "justify-content:flex-end;";
-        actions.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
+        actions.style.cssText = "justify-content:space-between;";
 
-        const confirmBtn = actions.createEl("button", { text: "确认推送", cls: "mod-cta" });
-        confirmBtn.addEventListener("click", async () => {
+        const cancelBtn = actions.createEl("button", { text: "取消" });
+        cancelBtn.addEventListener("click", () => this.close());
+
+        const rightBtns = actions.createDiv();
+        rightBtns.style.cssText = "display:flex;gap:8px;";
+
+        const commitOnlyBtn = rightBtns.createEl("button", { text: "仅 Commit" });
+        commitOnlyBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) { new Notice("请至少选择一个文件"); return; }
-          confirmBtn.disabled = true;
-          confirmBtn.textContent = "推送中...";
+          commitOnlyBtn.disabled = true;
+          commitOnlyBtn.textContent = "提交中...";
           try {
-            await gitService.stageFiles(selected);
+            const staged = await gitService.stageFiles(selected);
+            const committed = await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
+            if (committed) {
+              new Notice(staged.length === selected.length
+                ? `已提交 ${staged.length} 个文件`
+                : `已提交 ${staged.length} 个文件（${selected.length - staged.length} 个暂存失败）`);
+            } else {
+              new Notice("没有需要提交的变更");
+            }
+            this.close();
+            await view.update();
+          } catch (e: any) {
+            new Notice(`Commit 失败: ${e.message}`);
+            commitOnlyBtn.disabled = false;
+            commitOnlyBtn.textContent = "仅 Commit";
+          }
+        });
+
+        const pushBtn = rightBtns.createEl("button", { text: "Commit & Push", cls: "mod-cta" });
+        pushBtn.addEventListener("click", async () => {
+          const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
+          if (selected.length === 0) { new Notice("请至少选择一个文件"); return; }
+          pushBtn.disabled = true;
+          pushBtn.textContent = "推送中...";
+          try {
+            const staged = await gitService.stageFiles(selected);
             await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
             await gitService.push(settings.gitRemoteName, settings.gitBranchName,
               settings.gitUsername || undefined, settings.gitPassword || undefined);
-            new Notice(`已推送 ${selected.length} 个文件`);
+            new Notice(staged.length === selected.length
+              ? `已推送 ${staged.length} 个文件`
+              : `已推送 ${staged.length} 个文件（${selected.length - staged.length} 个暂存失败）`);
             this.close();
             await view.update();
           } catch (e: any) {
             new Notice(`Push 失败: ${e.message}`);
-            confirmBtn.disabled = false;
-            confirmBtn.textContent = "确认推送";
+            pushBtn.disabled = false;
+            pushBtn.textContent = "Commit & Push";
           }
         });
       }

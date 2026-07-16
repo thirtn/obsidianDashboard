@@ -783,6 +783,7 @@ var GitService = class {
     this.exec("git init");
   }
   async ensureRemote(url, name2) {
+    let isNew = false;
     try {
       const existing = this.exec(`git remote get-url ${name2}`).trim();
       if (existing !== url) {
@@ -790,6 +791,13 @@ var GitService = class {
       }
     } catch (e) {
       this.exec(`git remote add ${name2} ${url}`);
+      isNew = true;
+    }
+    if (isNew) {
+      try {
+        this.exec(`git fetch ${name2}`);
+      } catch (e) {
+      }
     }
   }
   async hasCommits() {
@@ -802,16 +810,11 @@ var GitService = class {
   }
   parsePorcelainPath(line) {
     const clean = line.replace(/^\ufeff/, "");
-    const match = clean.match(/^\S{0,2}\s+(.*)$/);
-    if (!match) {
-      console.log("[yyDashboard] parsePorcelainPath no match for:", JSON.stringify(line));
-      return "";
-    }
-    const raw = match[1];
-    const arrow = raw.indexOf(" -> ");
-    return arrow > -1 ? raw.slice(arrow + 4) : raw;
+    const pathPart = clean.slice(2).replace(/^ +/, "");
+    const arrow = pathPart.indexOf(" -> ");
+    return arrow > -1 ? pathPart.slice(arrow + 4) : pathPart;
   }
-  async getStatus() {
+  async getStatus(remoteName, branchName) {
     if (this.isMobile)
       return { clean: true, files: [], ahead: 0, behind: 0 };
     let clean = true;
@@ -827,13 +830,25 @@ var GitService = class {
     let ahead = 0;
     let behind = 0;
     try {
-      const branch = this.exec("git rev-parse --abbrev-ref HEAD").trim();
-      const counts = this.exec(
-        `git rev-list --left-right --count ${branch}@{upstream}...${branch}`
-      );
-      const parts = counts.trim().split("	");
-      behind = parseInt(parts[0]) || 0;
-      ahead = parseInt(parts[1]) || 0;
+      if (remoteName && branchName) {
+        try {
+          const counts = this.exec(
+            `git rev-list --left-right --count ${remoteName}/${branchName}...${branchName}`
+          );
+          const parts = counts.trim().split("	");
+          behind = parseInt(parts[0]) || 0;
+          ahead = parseInt(parts[1]) || 0;
+        } catch (e) {
+        }
+      } else {
+        const branch = this.exec("git rev-parse --abbrev-ref HEAD").trim();
+        const counts = this.exec(
+          `git rev-list --left-right --count ${branch}@{upstream}...${branch}`
+        );
+        const parts = counts.trim().split("	");
+        behind = parseInt(parts[0]) || 0;
+        ahead = parseInt(parts[1]) || 0;
+      }
     } catch (e) {
     }
     return { clean, files, ahead, behind };
@@ -996,17 +1011,11 @@ var GitService = class {
       return [];
     try {
       const output = this.exec(
-        `git log --oneline --format="%H|%an|%s|%ai" -n ${n}`
+        `git log --format="%H%x00%an%x00%s%x00%ai" -n ${n}`
       );
       return output.trim().split("\n").filter(Boolean).map((line) => {
-        const idx1 = line.indexOf("|");
-        const idx2 = line.indexOf("|", idx1 + 1);
-        const idx3 = line.indexOf("|", idx2 + 1);
-        const hash = line.slice(0, idx1);
-        const author = line.slice(idx1 + 1, idx2);
-        const message = line.slice(idx2 + 1, idx3);
-        const date = line.slice(idx3 + 1);
-        return { hash: hash.slice(0, 7), message, date, author };
+        const parts = line.split("\0");
+        return { hash: parts[0].slice(0, 7), message: parts[2], date: parts[3], author: parts[1] };
       });
     } catch (e) {
       return [];
@@ -2309,6 +2318,7 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
           this.contentEl.createEl("p", { text: `${name2}\u4E0D\u5B58\u5728\uFF0C\u662F\u5426\u65B0\u5EFA\uFF1F` });
           this.contentEl.createEl("p", { text: path, cls: "dashboard-field-hint" });
           const btns = this.contentEl.createDiv("dashboard-confirm-btns");
+          btns.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
           btns.createEl("button", { text: "\u65B0\u5EFA", cls: "mod-cta" }).addEventListener("click", async () => {
             this.close();
             try {
@@ -2317,7 +2327,6 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
               new import_obsidian12.Notice(`\u521B\u5EFA\u5931\u8D25: ${e.message}`);
             }
           });
-          btns.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
         }
         onClose() {
           this.contentEl.empty();
@@ -2771,7 +2780,10 @@ var GitSyncComponent = class extends BaseComponent {
     }
     let status = { clean: true, files: [], ahead: 0, behind: 0 };
     try {
-      status = await this.gitService.getStatus();
+      status = await this.gitService.getStatus(
+        this.settings.gitRemoteName || void 0,
+        this.settings.gitBranchName || void 0
+      );
     } catch (e) {
     }
     const statusRow = body.createDiv("dashboard-git-status");
@@ -2887,8 +2899,10 @@ var GitSyncComponent = class extends BaseComponent {
         this.settings.gitPassword || void 0
       );
       console.log("[yyDashboard] Auto push completed");
+      new import_obsidian15.Notice("\u81EA\u52A8\u63A8\u9001\u6210\u529F");
     } catch (e) {
       console.log(`[yyDashboard] Auto push failed: ${e.message}`);
+      new import_obsidian15.Notice(`\u81EA\u52A8\u63A8\u9001\u5931\u8D25: ${e.message}`);
     }
   }
   buildCommitMessage() {
@@ -3068,19 +3082,47 @@ var GitSyncComponent = class extends BaseComponent {
           row.createEl("span", { text: f.path, cls: "dashboard-push-file-path" });
         }
         const actions = contentEl.createDiv("dashboard-modal-actions");
-        actions.style.cssText = "justify-content:flex-end;";
-        actions.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
-        const confirmBtn = actions.createEl("button", { text: "\u786E\u8BA4\u63A8\u9001", cls: "mod-cta" });
-        confirmBtn.addEventListener("click", async () => {
+        actions.style.cssText = "justify-content:space-between;";
+        const cancelBtn = actions.createEl("button", { text: "\u53D6\u6D88" });
+        cancelBtn.addEventListener("click", () => this.close());
+        const rightBtns = actions.createDiv();
+        rightBtns.style.cssText = "display:flex;gap:8px;";
+        const commitOnlyBtn = rightBtns.createEl("button", { text: "\u4EC5 Commit" });
+        commitOnlyBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) {
             new import_obsidian15.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
             return;
           }
-          confirmBtn.disabled = true;
-          confirmBtn.textContent = "\u63A8\u9001\u4E2D...";
+          commitOnlyBtn.disabled = true;
+          commitOnlyBtn.textContent = "\u63D0\u4EA4\u4E2D...";
           try {
-            await gitService.stageFiles(selected);
+            const staged = await gitService.stageFiles(selected);
+            const committed = await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
+            if (committed) {
+              new import_obsidian15.Notice(staged.length === selected.length ? `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
+            } else {
+              new import_obsidian15.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u53D8\u66F4");
+            }
+            this.close();
+            await view.update();
+          } catch (e) {
+            new import_obsidian15.Notice(`Commit \u5931\u8D25: ${e.message}`);
+            commitOnlyBtn.disabled = false;
+            commitOnlyBtn.textContent = "\u4EC5 Commit";
+          }
+        });
+        const pushBtn = rightBtns.createEl("button", { text: "Commit & Push", cls: "mod-cta" });
+        pushBtn.addEventListener("click", async () => {
+          const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
+          if (selected.length === 0) {
+            new import_obsidian15.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
+            return;
+          }
+          pushBtn.disabled = true;
+          pushBtn.textContent = "\u63A8\u9001\u4E2D...";
+          try {
+            const staged = await gitService.stageFiles(selected);
             await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
             await gitService.push(
               settings.gitRemoteName,
@@ -3088,13 +3130,13 @@ var GitSyncComponent = class extends BaseComponent {
               settings.gitUsername || void 0,
               settings.gitPassword || void 0
             );
-            new import_obsidian15.Notice(`\u5DF2\u63A8\u9001 ${selected.length} \u4E2A\u6587\u4EF6`);
+            new import_obsidian15.Notice(staged.length === selected.length ? `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
             this.close();
             await view.update();
           } catch (e) {
             new import_obsidian15.Notice(`Push \u5931\u8D25: ${e.message}`);
-            confirmBtn.disabled = false;
-            confirmBtn.textContent = "\u786E\u8BA4\u63A8\u9001";
+            pushBtn.disabled = false;
+            pushBtn.textContent = "Commit & Push";
           }
         });
       }
@@ -3619,6 +3661,7 @@ var DashboardView = class extends import_obsidian19.ItemView {
     this.lastRenderTime = 0;
     this.autoRefreshTimer = null;
     this.visibilityTimer = null;
+    this.gitRefreshTimer = null;
     this.AUTO_REFRESH_COOLDOWN = 5 * 60 * 1e3;
     this.VISIBILITY_CHECK_INTERVAL = 30 * 60 * 1e3;
     this.settings = settings;
@@ -3763,7 +3806,11 @@ var DashboardView = class extends import_obsidian19.ItemView {
           this.fileStatsComponent.renderRecentFiles(recentContainer);
       }, 800);
       if (this.settings.gitEnabled) {
-        this.gitSyncComponent.update();
+        if (this.gitRefreshTimer)
+          clearTimeout(this.gitRefreshTimer);
+        this.gitRefreshTimer = setTimeout(() => {
+          this.gitSyncComponent.update();
+        }, 3e3);
       }
       this.gitSyncComponent.triggerAutoPushDebounce();
     };
@@ -3809,6 +3856,8 @@ var DashboardView = class extends import_obsidian19.ItemView {
     }
     if (this.autoRefreshTimer)
       clearTimeout(this.autoRefreshTimer);
+    if (this.gitRefreshTimer)
+      clearTimeout(this.gitRefreshTimer);
     if (this.visibilityTimer)
       clearInterval(this.visibilityTimer);
     this.gitSyncComponent.destroy();

@@ -75,6 +75,7 @@ export class GitService {
   }
 
   async ensureRemote(url: string, name: string): Promise<void> {
+    let isNew = false;
     try {
       const existing = this.exec(`git remote get-url ${name}`).trim();
       if (existing !== url) {
@@ -82,6 +83,11 @@ export class GitService {
       }
     } catch {
       this.exec(`git remote add ${name} ${url}`);
+      isNew = true;
+    }
+    // Fetch to make remote branch refs available for ahead/behind tracking
+    if (isNew) {
+      try { this.exec(`git fetch ${name}`); } catch { /* will be available after first push */ }
     }
   }
 
@@ -97,16 +103,15 @@ export class GitService {
   private parsePorcelainPath(line: string): string {
     // Strip BOM if present (Electron may add it)
     const clean = line.replace(/^\ufeff/, '');
-    // Porcelain format: "XY path" or "XY old -> new" (renames)
-    // Use \S{0,2}\s+ to be resilient against encoding quirks
-    const match = clean.match(/^\S{0,2}\s+(.*)$/);
-    if (!match) { console.log("[yyDashboard] parsePorcelainPath no match for:", JSON.stringify(line)); return ""; }
-    const raw = match[1];
-    const arrow = raw.indexOf(" -> ");
-    return arrow > -1 ? raw.slice(arrow + 4) : raw;
+    // Porcelain format: "XY PATH" or "XY ORIG_PATH -> PATH" (renames)
+    // When Y is space, it doubles as the separator (e.g. "M file"), so only 2 chars before path.
+    // When Y is not space, there's a separate space (e.g. " M file", "?? file"), so 3 chars.
+    const pathPart = clean.slice(2).replace(/^ +/, '');
+    const arrow = pathPart.indexOf(" -> ");
+    return arrow > -1 ? pathPart.slice(arrow + 4) : pathPart;
   }
 
-  async getStatus(): Promise<GitStatus> {
+  async getStatus(remoteName?: string, branchName?: string): Promise<GitStatus> {
     if (this.isMobile) return { clean: true, files: [], ahead: 0, behind: 0 };
 
     let clean = true;
@@ -122,13 +127,25 @@ export class GitService {
     let ahead = 0;
     let behind = 0;
     try {
-      const branch = this.exec("git rev-parse --abbrev-ref HEAD").trim();
-      const counts = this.exec(
-        `git rev-list --left-right --count ${branch}@{upstream}...${branch}`
-      );
-      const parts = counts.trim().split("\t");
-      behind = parseInt(parts[0]) || 0;
-      ahead = parseInt(parts[1]) || 0;
+      // Prefer explicit remote/branch to avoid @{upstream} not configured
+      if (remoteName && branchName) {
+        try {
+          const counts = this.exec(
+            `git rev-list --left-right --count ${remoteName}/${branchName}...${branchName}`
+          );
+          const parts = counts.trim().split("\t");
+          behind = parseInt(parts[0]) || 0;
+          ahead = parseInt(parts[1]) || 0;
+        } catch { /* remote branch may not exist yet */ }
+      } else {
+        const branch = this.exec("git rev-parse --abbrev-ref HEAD").trim();
+        const counts = this.exec(
+          `git rev-list --left-right --count ${branch}@{upstream}...${branch}`
+        );
+        const parts = counts.trim().split("\t");
+        behind = parseInt(parts[0]) || 0;
+        ahead = parseInt(parts[1]) || 0;
+      }
     } catch { /* no upstream or no commits */ }
 
     return { clean, files, ahead, behind };
@@ -322,21 +339,15 @@ export class GitService {
     if (this.isMobile) return [];
     try {
       const output = this.exec(
-        `git log --oneline --format="%H|%an|%s|%ai" -n ${n}`
+        `git log --format="%H%x00%an%x00%s%x00%ai" -n ${n}`
       );
       return output
         .trim()
         .split("\n")
         .filter(Boolean)
         .map((line) => {
-          const idx1 = line.indexOf("|");
-          const idx2 = line.indexOf("|", idx1 + 1);
-          const idx3 = line.indexOf("|", idx2 + 1);
-          const hash = line.slice(0, idx1);
-          const author = line.slice(idx1 + 1, idx2);
-          const message = line.slice(idx2 + 1, idx3);
-          const date = line.slice(idx3 + 1);
-          return { hash: hash.slice(0, 7), message, date, author };
+          const parts = line.split("\0");
+          return { hash: parts[0].slice(0, 7), message: parts[2], date: parts[3], author: parts[1] };
         });
     } catch {
       return [];
