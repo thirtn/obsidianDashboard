@@ -73,7 +73,8 @@ export class RemotelySaveService {
                 ? JSON.parse(record.syncPlan)
                 : record.syncPlan;
               const session = this.parseSyncPlan(record, plan);
-              if (session && session.totalCount > 0) {
+              // Include sessions with no changes too — the UI shows a "无变更" badge for them.
+              if (session) {
                 sessions.push(session);
               }
             } catch { /* skip malformed records */ }
@@ -98,32 +99,21 @@ export class RemotelySaveService {
   private parseSyncPlan(record: any, plan: any): SyncSession | null {
     if (!plan || typeof plan !== "object") return null;
 
+    const entries = this.extractFileEntries(plan);
     const uploads: string[] = [];
     const downloads: string[] = [];
     const deletions: string[] = [];
 
-    for (const [key, info] of Object.entries(plan) as [string, any][]) {
-      if (!info || typeof info !== "object") continue;
+    for (const [key, info] of entries) {
+      // Only entries where Remotely Save actually performed an operation.
+      if (info.change !== true) continue;
 
-      const decision: string = info.decision || "";
-      const changed = info.change === true;
-
-      if (!changed) continue;
-
-      if (decision.startsWith("upload")) {
-        uploads.push(key);
-      } else if (decision.startsWith("download")) {
-        downloads.push(key);
-      } else if (decision.startsWith("delete") || decision.startsWith("remove")) {
-        deletions.push(key);
-      } else if (decision === "keepRemote" || decision === "overwrite") {
-        downloads.push(key);
-      } else if (decision === "keepLocal" || decision === "overwriteRemote") {
-        uploads.push(key);
-      } else if (changed && key) {
-        // Catch any other changed files
-        uploads.push(key);
-      }
+      const decision = String(info.decision || "").toLowerCase();
+      const category = this.categorize(decision);
+      if (category === "upload") uploads.push(key);
+      else if (category === "download") downloads.push(key);
+      else if (category === "delete") deletions.push(key);
+      else uploads.push(key); // Unknown but changed — surface as upload rather than swallowing it
     }
 
     return {
@@ -135,5 +125,49 @@ export class RemotelySaveService {
       deletions,
       totalCount: uploads.length + downloads.length + deletions.length,
     };
+  }
+
+  /** Map a Remotely Save `decision` enum value to a coarse operation category. */
+  private categorize(decision: string): "upload" | "download" | "delete" | "unknown" {
+    // Deletion decisions typically contain `del` or `remove`.
+    if (/(^|_)del(_|$)|delete|remove|delhist/.test(decision)) return "delete";
+    // Upload: local change pushed to remote, or conflict resolved by keeping local.
+    if (/push|upload|local_is_modified|local_is_created|keep_local|overwrite_remote/.test(decision)) return "upload";
+    // Download: remote change pulled to local, or conflict resolved by keeping remote.
+    if (/pull|download|remote_is_modified|remote_is_created|keep_remote|overwrite_local/.test(decision)) return "download";
+    return "unknown";
+  }
+
+  /** Extract file entries from a sync plan, tolerating multiple Remotely Save formats. */
+  private extractFileEntries(plan: any): [string, any][] {
+    const results: [string, any][] = [];
+
+    // Prefer known nested containers used by newer Remotely Save versions.
+    const nestedKeys = ["mixedStates", "mixedEntities", "syncPlanEntries", "entries"];
+    for (const nk of nestedKeys) {
+      const nested = plan[nk];
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        for (const [k, v] of Object.entries(nested)) {
+          if (v && typeof v === "object" && (v as any).decision !== undefined) {
+            results.push([this.entryKey(k, v), v]);
+          }
+        }
+        if (results.length > 0) return results;
+      }
+    }
+
+    // Fallback: legacy flat format — file paths are top-level keys.
+    for (const [k, v] of Object.entries(plan)) {
+      if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+      if ((v as any).decision === undefined && (v as any).change === undefined) continue;
+      results.push([this.entryKey(k, v), v]);
+    }
+    return results;
+  }
+
+  private entryKey(k: string, v: any): string {
+    // Prefer the entry's own `key` field if present (newer formats), else fall back to the outer object key.
+    if (v && typeof v === "object" && typeof v.key === "string" && v.key) return v.key;
+    return k;
   }
 }

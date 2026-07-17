@@ -1299,7 +1299,7 @@ var RemotelySaveService = class {
             try {
               const plan = typeof record.syncPlan === "string" ? JSON.parse(record.syncPlan) : record.syncPlan;
               const session = this.parseSyncPlan(record, plan);
-              if (session && session.totalCount > 0) {
+              if (session) {
                 sessions.push(session);
               }
             } catch (e) {
@@ -1322,29 +1322,23 @@ var RemotelySaveService = class {
   parseSyncPlan(record, plan) {
     if (!plan || typeof plan !== "object")
       return null;
+    const entries = this.extractFileEntries(plan);
     const uploads = [];
     const downloads = [];
     const deletions = [];
-    for (const [key, info] of Object.entries(plan)) {
-      if (!info || typeof info !== "object")
+    for (const [key, info] of entries) {
+      if (info.change !== true)
         continue;
-      const decision = info.decision || "";
-      const changed = info.change === true;
-      if (!changed)
-        continue;
-      if (decision.startsWith("upload")) {
+      const decision = String(info.decision || "").toLowerCase();
+      const category = this.categorize(decision);
+      if (category === "upload")
         uploads.push(key);
-      } else if (decision.startsWith("download")) {
+      else if (category === "download")
         downloads.push(key);
-      } else if (decision.startsWith("delete") || decision.startsWith("remove")) {
+      else if (category === "delete")
         deletions.push(key);
-      } else if (decision === "keepRemote" || decision === "overwrite") {
-        downloads.push(key);
-      } else if (decision === "keepLocal" || decision === "overwriteRemote") {
+      else
         uploads.push(key);
-      } else if (changed && key) {
-        uploads.push(key);
-      }
     }
     return {
       ts: record.ts || 0,
@@ -1355,6 +1349,46 @@ var RemotelySaveService = class {
       deletions,
       totalCount: uploads.length + downloads.length + deletions.length
     };
+  }
+  /** Map a Remotely Save `decision` enum value to a coarse operation category. */
+  categorize(decision) {
+    if (/(^|_)del(_|$)|delete|remove|delhist/.test(decision))
+      return "delete";
+    if (/push|upload|local_is_modified|local_is_created|keep_local|overwrite_remote/.test(decision))
+      return "upload";
+    if (/pull|download|remote_is_modified|remote_is_created|keep_remote|overwrite_local/.test(decision))
+      return "download";
+    return "unknown";
+  }
+  /** Extract file entries from a sync plan, tolerating multiple Remotely Save formats. */
+  extractFileEntries(plan) {
+    const results = [];
+    const nestedKeys = ["mixedStates", "mixedEntities", "syncPlanEntries", "entries"];
+    for (const nk of nestedKeys) {
+      const nested = plan[nk];
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        for (const [k, v] of Object.entries(nested)) {
+          if (v && typeof v === "object" && v.decision !== void 0) {
+            results.push([this.entryKey(k, v), v]);
+          }
+        }
+        if (results.length > 0)
+          return results;
+      }
+    }
+    for (const [k, v] of Object.entries(plan)) {
+      if (!v || typeof v !== "object" || Array.isArray(v))
+        continue;
+      if (v.decision === void 0 && v.change === void 0)
+        continue;
+      results.push([this.entryKey(k, v), v]);
+    }
+    return results;
+  }
+  entryKey(k, v) {
+    if (v && typeof v === "object" && typeof v.key === "string" && v.key)
+      return v.key;
+    return k;
   }
 };
 

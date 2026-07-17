@@ -121,7 +121,7 @@ DashboardView (ItemView)
 - **文件统计**：`trackedFolders`（默认 `raw, wiki, outputs, concepts, entities`）
 - **报表**：`reportConfigs`（daily/weekly/monthly/quarterly/yearly，含目录、文件名格式、模板）
 - **任务**：`taskDefaults`（各优先级默认输入、进行中任务百分比）
-- **Git**：`gitEnabled`, `gitRemoteURL`, `gitRemoteName`, `gitBranchName`, `gitUsername`, `gitPassword`, `gitAutoPush*`, `gitCommitTemplate`
+- **Git**：`gitEnabled`, `gitRemoteURL`, `gitRemoteName`, `gitBranchName`, `gitUsername`, `gitPassword`, `gitAutoPush*`, `gitCommitTemplate`, `gitPollInterval`（状态轮询秒），`gitPushTimeout`（push/pull 单次超时，分钟，0=不限时）
 - **UI**：`dashboardTitle`, `dashboardDesc`, `moduleOrder`, `moduleVisibility`
 - **启动行为**：`openOnStartup`（Obsidian 启动后自动打开 Dashboard）
 - **持久化路径**：`heatmapDataPath`, `tokenUsageDataPath`
@@ -171,8 +171,13 @@ Frontmatter 约定（FileService 异常检测）：
 
 ### GitService
 - **仅桌面端**：`Platform.isMobile` 时抛错
-- 使用 `execSync` 在 vault 根目录执行 git
-- HTTPS 认证：`gitUsername` + `gitPassword`（GitHub Token）
+- 全部走 `execFileSync("git", args, …)`（argv 而非 shell）—— 路径含中文/空格/emoji/括号都能正确传给 git
+- `getStatusFiles` 用 `git status --porcelain=v1 -z`（NUL 分隔），正确处理 rename、CRLF、BOM
+- HTTPS 认证：`gitUsername` + `gitPassword`（GitHub Token）通过 `-c http.extraHeader=Authorization: Basic <b64>` 传入，**token 不进 URL / reflog / 进程参数**
+- push 用 remote 名字 + `--set-upstream`，且成功后主动 `git fetch` 一次同步本地 `refs/remotes/<remote>/<branch>`
+- `push` 内置**超时校验回退**：`execFileSync` TIMEOUT 时不直接抛错，先跑 `verifyRemoteMatchesLocal`（fetch 后比较本地 HEAD 与远端 tip 的 SHA），相等就返回「推送成功（客户端超时，但服务端已完成）」，避免「已推送但 Dashboard 显示领先 1 次提交」的假失败
+- push/pull 单次超时可配置（`gitPushTimeout`，分钟，0=不限时；本地命令如 status/commit/log 固定 30 秒）
+- `ensureRemote` 检测已有同 URL remote 就复用，避免重复添加
 - 支持 init、remote、stage、commit、push、pull、log、checkout 回滚
 
 ### RemotelySaveService
@@ -181,6 +186,13 @@ Frontmatter 约定（FileService 异常检测）：
 
 ### LogService
 - 扫描 `wiki/log/*.md`，解析最近 N 条 ingest/query/lint 记录
+
+### utils/lunar.ts（纯工具）
+- `getLunarInfo(date)` → `{ganzhiYear, zodiac, lunarMonth, lunarDay, shichen}`
+- 内置 1900–2100 年农历数据表（每年 16 位编码：闰月位 + 12 个月大小 + 闰月是否 30 天）
+- 干支纪年：`(year - 4) % 60` → 10 天干 + 12 地支，1900 甲子起
+- 十二时辰：23-1 子时、17-19 酉时……按小时切分
+- 完全离线、无依赖；HeaderComponent 每秒 tick 时按「日期+小时」变化才刷新，省 CPU
 
 ## DashboardView 生命周期行为
 
@@ -252,9 +264,27 @@ Frontmatter 约定（FileService 异常检测）：
 3. **Services 集中注入到 Component**
    - 现状：`RemotelySaveComponent`、`LLMCommandComponent`、`FileStatsComponent` 内部再次 `new` service，和 `DashboardView` 里的实例重复。
    - 方案：所有 service 只在 `DashboardView` new 一次，通过构造函数传给 Component；便于设置广播和资源统一释放。
-4. **`GitService.execSync` → `execFile`（异步）**
-   - 现状：`git status` / `git log` 大仓库上会阻塞 Obsidian 主线程若干毫秒。
-   - 方案：改成 `execFile` + Promise，`GitService` 所有方法都 async；`GitSyncComponent` 已经在 await，改动集中在 service 内部。
+4. **`GitService` 同步 → `spawn` 异步（未完成）**
+   - 现状：`execFileSync` 已用 argv 版本，但仍是**同步阻塞**。push 大 pack 时 Obsidian 主线程假死；用户看不到 `Writing objects: x%` 进度；「取消」按钮无法真正 kill git 进程。
+   - 方案：改成 `spawn` + Promise + 事件流：stdout/stderr 逐块 emit 用于进度条、`child.kill('SIGTERM')` 支持中止、返回 Promise 让 `GitSyncComponent` 保持 await；本地 status/log 之类快命令可继续用同步版本。
+   - 依赖 UI 侧：`GitSyncComponent` 需要新增进度条 DOM 和 Cancel 按钮。
+
+### P1.5 — 待决策：云同步记录持久化
+
+**背景**：`RemotelySaveComponent` 直接从 Remotely Save 的 IndexedDB (`remotelysavedb.syncplanshistory`) 读取历史。Remotely Save 有自己的清理策略（版本不同上限 5~100 条不等），超上限就删最老的；用户重装 / 清缓存也会全部丢失。Dashboard 目前只是「实时快照」，长期回看不可靠。
+
+**触发条件**：先跑诊断脚本确认 Remotely Save 当前保留上限，若 ≥ 100 条且用户日均同步 < 20 次，可不做。否则做。
+
+**方案（做的话）**：
+1. `RemotelySaveService` 新增 `snapshotHistory()`：读 IndexedDB → 与 `.dashboard/sync-history.json` 合并 → 按 `ts` 去重 → 落盘
+2. `DashboardView` 在 view 打开时和 vault 每次变更 debounce 后调用 `snapshotHistory()`
+3. `getSyncHistory` 优先读 vault JSON，回落到 IndexedDB
+4. 新增设置项 `syncHistoryRetentionDays`（默认 90 天），清理超期条目
+5. 保持向前兼容：无 JSON 文件时行为等同现状
+
+**代价**：多一个 vault 文件（跟 `heatmap.json` / `token-usage.json` 同级）、每次同步后多一次落盘、需要处理 IndexedDB 打不开时的回退。
+
+**收益**：不受 Remotely Save 清理策略和缓存清理影响，可长期回看；跟 heatmap 同一模型，一致性好。
 
 ### P2 — 长期改进（无紧迫性）
 
@@ -281,6 +311,28 @@ Frontmatter 约定（FileService 异常检测）：
 - **LM 流式保护 + AbortController**：`LLMService.executeCommand` 支持 `signal`；`LLMCommandComponent` 执行中「▶ 执行」变成「⏹ 中止」；执行中 `render()` 直接复用现有 `modEl`，不再重建；`destroy()` 中止请求；导出前用 `adapter.exists("outputs")` 检查目录，报错提示改为 Notice
 - **Search 索引懒构建**：`SearchComponent` 用 `indexDirty` 标志，仅在 vault `create/delete/rename` + `metadataCache.changed` 时置脏，focus 时按需重建；`destroy()` 清理监听
 
+### 已完成的优化（Git 同步模块深度修复）
+
+- **删除废弃的 ReportHubComponent**（功能与热力图重复），从 `moduleOrder` / `MODULE_IDS` / `MODULE_LABELS` / `moduleVisibility` 默认值全部移除
+- **修复 Dashboard 折叠状态在 `update()` 重建后丢失**：body 隐藏改用 CSS 类而不是重建 DOM
+- **修复「一次只能同步一个文件」**：所有 git 命令改用 `execFileSync` 走 argv，不再走 shell 拼接；路径含空格/中文/emoji/括号都能正确传入
+- **`getStatusFiles` 改用 `--porcelain=v1 -z`**：NUL 分隔避免 CRLF/BOM，正确处理 rename 的成对路径
+- **修复 push 超时后弹窗卡死**：`GitSyncComponent` push modal 分「stage 失败 → 保留弹窗」/「commit 成功但 push 超时 → 提示可能已同步 + 关弹窗」/「commit 成功但 push 其他错 → 提示已本地提交 + 关弹窗」三种处理，都不再卡
+- **新增 `gitPushTimeout` 设置项**：分钟单位，0 = 不限时；齿轮弹窗 + 全局设置页两处入口；本地命令固定 30 秒不受影响
+- **push/pull 认证改走 extraHeader**：`git -c http.extraHeader=Authorization: Basic <b64> push …`，token 不再进 URL / reflog / 进程参数
+- **push 加 `--set-upstream`**：建立本地 remote-tracking，Dashboard 的 ahead/behind 数字终于准了
+- **`ensureRemote` 检测已有同 URL remote 就复用**：避免出现 `origin` 和 `personalWarehouse` 两个 remote 指向同一 URL 的冗余
+- **push 超时校验回退**：`execFileSync` TIMEOUT 时先 fetch 一次校验本地 HEAD == remote/branch SHA，相等则视为成功。彻底修复「push 已成功但 Dashboard 报超时 + 显示领先 1 次提交」的假失败现象
+- **修复热力图切年份误伤父容器**：`container.empty()` → 抽出 `renderBody(body)` 只重建自己的 body，不再清空其他模块
+- **修复插件管理开关状态错乱**：用 `plugins.plugins[id]` 兜底判断，比 `enabledPlugins` Set 更权威
+- **放大模块折叠按钮**：18px + 22×22 点击热区 + hover 背景
+
+### 已完成的优化（Header 增强）
+
+- **Obsidian 版本徽章旁新增实时时钟**：`YYYY-MM-DD 周X HH:MM:SS`，每秒刷新，`font-variant-numeric: tabular-nums` 数字等宽
+- **时钟后追加农历/干支/时辰**：`丙午马年·农历六月初四·酉时`；农历只在日期或整点变化时重算（key 比较 `toDateString + hour`），CPU 开销可忽略
+- **`HeaderComponent.destroy()`** 清理 `setInterval`；tick 内检测 `isConnected` 双重保险
+
 ---
 
-*最后通读日期：2026-07-17（P0/P1 优化后 + 二轮 P0 补丁）*
+*最后通读日期：2026-07-17（Git 深度修复 + Header 时钟/农历）*
