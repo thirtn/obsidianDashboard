@@ -20,9 +20,11 @@ export class PluginManageService {
     if (!plugins) return [];
 
     const manifests = plugins.manifests ?? {};
-
+    const instances: Record<string, unknown> = plugins.plugins ?? {};
     const enabledSet: Set<string> | Record<string, boolean> = plugins.enabledPlugins ?? {};
     const isEnabled = (id: string): boolean => {
+      // Loaded instance is the ground truth — if the plugin is running, it's enabled.
+      if (instances[id]) return true;
       if (enabledSet instanceof Set) return enabledSet.has(id);
       return !!(enabledSet as Record<string, boolean>)[id];
     };

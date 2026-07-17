@@ -19,9 +19,24 @@ export class HeatmapService {
   }
 
   startTracking() {
-    const handler = () => this.recordActivity();
-    this.app.vault.on("modify", handler);
-    this.unregister = () => this.app.vault.off("modify", handler);
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const handler = () => {
+      if (pending) return;
+      pending = setTimeout(() => {
+        pending = null;
+        this.recordActivity();
+      }, 300);
+    };
+    const vault = this.app.vault;
+    vault.on("modify", handler);
+    vault.on("create", handler);
+    vault.on("rename", handler);
+    this.unregister = () => {
+      if (pending) { clearTimeout(pending); pending = null; }
+      vault.off("modify", handler);
+      vault.off("create", handler);
+      vault.off("rename", handler);
+    };
   }
 
   stopTracking() {

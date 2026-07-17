@@ -43,13 +43,24 @@ export class FileService {
     const orphanCount = orphanFilesArr.length;
     const nosourceCount = nosourceFilesArr.length;
 
-    const emptyChecks = await Promise.all(
-      mdFiles.map(async (f) => {
-        const content = await this.app.vault.cachedRead(f);
-        return { path: f.path, empty: content.trim().length === 0 };
-      })
+    const emptyFilesArr: string[] = [];
+    const maybeEmpty = mdFiles.filter((f) => f.stat.size === 0);
+    for (const f of maybeEmpty) emptyFilesArr.push(f.path);
+
+    const smallFiles = mdFiles.filter(
+      (f) => f.stat.size > 0 && f.stat.size <= 256 && !emptyFilesArr.includes(f.path)
     );
-    const emptyFilesArr = emptyChecks.filter((c) => c.empty).map((c) => c.path);
+    if (smallFiles.length > 0) {
+      const checks = await Promise.all(
+        smallFiles.map(async (f) => {
+          const content = await this.app.vault.cachedRead(f);
+          return content.trim().length === 0 ? f.path : null;
+        })
+      );
+      for (const p of checks) {
+        if (p) emptyFilesArr.push(p);
+      }
+    }
     const emptyCount = emptyFilesArr.length;
 
     const healthScore = this.calcHealthScore(mdFiles.length, orphanCount, nosourceCount, emptyCount);
@@ -125,6 +136,17 @@ export class FileService {
       .sort((a, b) => b.stat.mtime - a.stat.mtime)
       .slice(0, limit)
       .map(f => ({ path: f.path, mtime: f.stat.mtime }));
+  }
+
+  getLatestInFolder(folderPrefix: string): RecentFile | null {
+    const prefix = folderPrefix.replace(/^\/+|\/+$/g, "") + "/";
+    const files = this.app.vault
+      .getFiles()
+      .filter((f) => f.path.startsWith(prefix))
+      .sort((a, b) => b.stat.mtime - a.stat.mtime);
+    if (files.length === 0) return null;
+    const f = files[0];
+    return { path: f.path, mtime: f.stat.mtime };
   }
 
   async toggleFolderInExplorer(name: string): Promise<void> {

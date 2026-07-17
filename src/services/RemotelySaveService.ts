@@ -20,8 +20,6 @@ export class RemotelySaveService {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(new Error("无法打开 Remotely Save 数据库"));
         req.onblocked = () => {
-          console.log("[yyDashboard] RS DB blocked — closing and retrying");
-          // Close any existing connections and retry
           if (req.result) req.result.close();
           reject(new Error("数据库被阻塞，请重试"));
         };
@@ -56,8 +54,7 @@ export class RemotelySaveService {
     let db: IDBDatabase | null = null;
     try {
       db = await this.openDB();
-    } catch (e: any) {
-      console.log("[yyDashboard] Remotely Save DB not available:", e.message);
+    } catch {
       return [];
     }
 
@@ -92,8 +89,7 @@ export class RemotelySaveService {
         };
 
         tx.onerror = () => resolve(sessions);
-      } catch (e: any) {
-        console.log("[yyDashboard] Error reading sync history:", e.message);
+      } catch {
         resolve([]);
       }
     });

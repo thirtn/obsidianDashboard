@@ -71,6 +71,43 @@ export interface ReportConfig {
 
 export type ReportSettings = Record<ReportType, ReportConfig>;
 
+export const REPORT_LABELS: Record<ReportType, string> = {
+  daily: "日报",
+  weekly: "周报",
+  monthly: "月报",
+  quarterly: "季报",
+  yearly: "年报",
+};
+
+/** Scrollable dashboard module IDs (excludes fixed header/search/workspace-bar) */
+export const MODULE_IDS = [
+  "file-stats",
+  "heatmap",
+  "llm-command",
+  "operation-log",
+  "git-sync",
+  "remotely-save",
+  "task-quickadd",
+  "plugin-manage",
+] as const;
+
+export type ModuleId = (typeof MODULE_IDS)[number];
+
+export const MODULE_LABELS: Record<ModuleId, string> = {
+  "file-stats": "文件统计",
+  heatmap: "工作热力图",
+  "llm-command": "LLM 指令执行",
+  "operation-log": "操作日志",
+  "git-sync": "Git 同步",
+  "remotely-save": "云同步记录",
+  "task-quickadd": "快速添加任务",
+  "plugin-manage": "插件管理",
+};
+
+export function defaultModuleVisibility(): Record<string, boolean> {
+  return Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
+}
+
 const defaultReportConfigs: ReportSettings = {
   daily:     { enabled: true,  confirmBeforeCreate: true,  directory: "raw/dayReport",     filenameFormat: "YYYY/MM/YYYY-MM-DD",   templatePath: "raw/dayReport/template" },
   weekly:    { enabled: false, confirmBeforeCreate: true,  directory: "raw/weekReport",    filenameFormat: "YYYY/MM/YYYY-[W]ww",   templatePath: "raw/weekReport/template" },
@@ -110,9 +147,16 @@ export interface DashboardSettings {
   gitPassword: string;
   gitAutoPushEnabled: boolean;
   gitAutoPushInterval: number;
+  gitPollInterval: number;
+  gitPushTimeout: number;
+  gitPollInterval: number;
   gitCommitTemplate: string;
   // Module order (drag-and-drop)
   moduleOrder: string[];
+  // Per-module visibility toggles
+  moduleVisibility: Record<string, boolean>;
+  // Open dashboard when Obsidian starts
+  openOnStartup: boolean;
   // Vault persistence paths
   heatmapDataPath: string;
   tokenUsageDataPath: string;
@@ -157,8 +201,21 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
   gitPassword: "",
   gitAutoPushEnabled: false,
   gitAutoPushInterval: 30,
+  gitPollInterval: 30,
+  gitPushTimeout: 5,
   gitCommitTemplate: "auto: {{date}} {{time}}",
-  moduleOrder: ["file-stats", "heatmap", "llm-command", "git-sync", "remotely-save", "task-quickadd", "plugin-manage"],
+  moduleOrder: [
+    "file-stats",
+    "heatmap",
+    "llm-command",
+    "operation-log",
+    "git-sync",
+    "remotely-save",
+    "task-quickadd",
+    "plugin-manage",
+  ],
+  moduleVisibility: defaultModuleVisibility(),
+  openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
   tokenUsageDataPath: ".dashboard/token-usage.json",
 };

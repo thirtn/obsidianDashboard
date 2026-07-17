@@ -3,11 +3,16 @@ import { BaseComponent } from "./BaseComponent";
 import { DashboardSettings } from "../../types";
 import { LLMService } from "../../services/LLMService";
 import { ModelConfigModal } from "../../modals/ModelConfigModal";
+import { getLunarInfo } from "../../utils/lunar";
 
 export class HeaderComponent extends BaseComponent {
   private llmService: LLMService;
   private onSettingsChange: (s: DashboardSettings) => Promise<void>;
   private onRefresh: () => Promise<void>;
+  private tokenBarEl: HTMLElement | null = null;
+  private clockEl: HTMLElement | null = null;
+  private lunarEl: HTMLElement | null = null;
+  private clockTimer: number | null = null;
 
   constructor(
     app: App,
@@ -54,13 +59,68 @@ export class HeaderComponent extends BaseComponent {
     if (obsVersion) {
       metaRow.createEl("span", { text: `Obsidian v${obsVersion}`, cls: "dashboard-version-label" });
     }
+    this.clockEl = metaRow.createEl("span", {
+      text: HeaderComponent.fmtClock(new Date()),
+      cls: "dashboard-clock",
+    });
+    this.lunarEl = metaRow.createEl("span", {
+      text: HeaderComponent.fmtLunar(new Date()),
+      cls: "dashboard-lunar",
+    });
+    this.startClock();
 
     this.renderTokenBar(header);
   }
 
+  private startClock() {
+    if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
+    let lastLunarKey = "";
+    this.clockTimer = window.setInterval(() => {
+      if (!this.clockEl || !this.clockEl.isConnected) {
+        if (this.clockTimer !== null) {
+          window.clearInterval(this.clockTimer);
+          this.clockTimer = null;
+        }
+        return;
+      }
+      const now = new Date();
+      this.clockEl.textContent = HeaderComponent.fmtClock(now);
+      // Refresh lunar/shichen only when the hour or date changes.
+      const key = `${now.toDateString()}#${now.getHours()}`;
+      if (this.lunarEl && key !== lastLunarKey) {
+        this.lunarEl.textContent = HeaderComponent.fmtLunar(now);
+        lastLunarKey = key;
+      }
+    }, 1000);
+  }
+
+  destroy(): void {
+    if (this.clockTimer !== null) {
+      window.clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
+    this.clockEl = null;
+    this.lunarEl = null;
+    super.destroy();
+  }
+
+  private static fmtLunar(d: Date): string {
+    const info = getLunarInfo(d);
+    return `${info.ganzhiYear}${info.zodiac}年·农历${info.lunarMonth}${info.lunarDay}·${info.shichen}`;
+  }
+
+  private static fmtClock(d: Date): string {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const y = d.getFullYear();
+    const m = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const w = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+    return `${y}-${m}-${day} 周${w} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
   private renderTokenBar(header: HTMLElement) {
     const bar = header.createDiv("dashboard-header-token");
-    bar.setAttribute("id", "dashboard-token-bar");
+    this.tokenBarEl = bar;
 
     let today = 0, thisMonth = 0;
     try {
@@ -90,29 +150,19 @@ export class HeaderComponent extends BaseComponent {
             headers: { Authorization: `Bearer ${this.settings.apiKey}` },
             throw: false,
           });
-          console.log("[Dashboard] 余额API status:", resp.status);
-          if (resp.status === 200) {
-            console.log("[Dashboard] 余额API body:", JSON.stringify(resp.json));
-            if (resp.json?.balance_infos) {
-              for (const item of resp.json.balance_infos) {
-                makeChip(`余额(${item.currency})`, item.total_balance);
-              }
-            } else {
-              console.log("[Dashboard] 余额API 缺少 balance_infos 字段");
+          if (resp.status === 200 && resp.json?.balance_infos) {
+            for (const item of resp.json.balance_infos) {
+              makeChip(`余额(${item.currency})`, item.total_balance);
             }
-          } else {
-            console.log("[Dashboard] 余额API 请求失败, status:", resp.status);
           }
-        } catch (e) {
-          console.log("[Dashboard] 余额API 异常:", e);
-        }
+        } catch { /* ignore */ }
       })();
     }
   }
 
   async refreshTokenBar() {
-    const bar = document.getElementById("dashboard-token-bar");
-    if (!bar) return;
+    const bar = this.tokenBarEl;
+    if (!bar || !bar.isConnected) return;
     let today = 0, thisMonth = 0;
     try {
       const store = this.loadLocalTokenStore();

@@ -9,6 +9,9 @@ export class HeatmapComponent extends BaseComponent {
   private heatmapService: HeatmapService;
   private onSettingsChange: (s: DashboardSettings) => Promise<void>;
   private currentYear = new Date().getFullYear();
+  private bodyEl: HTMLElement | null = null;
+  private yearLabelEl: HTMLElement | null = null;
+  private nextBtnEl: HTMLElement | null = null;
 
   constructor(
     app: App,
@@ -33,12 +36,14 @@ export class HeatmapComponent extends BaseComponent {
     const yearNav = header.createDiv("dashboard-heatmap-year-nav");
     const prevBtn = yearNav.createEl("span", { text: "◀", cls: "dashboard-heatmap-year-arrow" });
     const yearLabel = yearNav.createEl("span", { text: String(this.currentYear), cls: "dashboard-heatmap-year-label clickable" });
+    this.yearLabelEl = yearLabel;
     yearLabel.addEventListener("click", () => {
       if (this.settings.reportConfigs.yearly.enabled) {
         this.openOrCreateReport("yearly", new Date(this.currentYear, 0, 1));
       }
     });
     const nextBtn = yearNav.createEl("span", { text: "▶", cls: "dashboard-heatmap-year-arrow" });
+    this.nextBtnEl = nextBtn;
 
     const cfgBtn = yearNav.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "日报/周报配置" });
     cfgBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
@@ -54,16 +59,34 @@ export class HeatmapComponent extends BaseComponent {
 
     prevBtn.addEventListener("click", () => {
       this.currentYear--;
-      this.render(container);
+      this.refreshYear();
     });
     nextBtn.addEventListener("click", () => {
       if (this.currentYear < thisYear) {
         this.currentYear++;
-        this.render(container);
+        this.refreshYear();
       }
     });
 
     const body = mod.createDiv("dashboard-module-body");
+    this.bodyEl = body;
+    this.renderBody(body);
+  }
+
+  private refreshYear() {
+    if (this.yearLabelEl) this.yearLabelEl.textContent = String(this.currentYear);
+    if (this.nextBtnEl) {
+      const thisYear = new Date().getFullYear();
+      if (this.currentYear >= thisYear) this.nextBtnEl.addClass("disabled");
+      else this.nextBtnEl.removeClass("disabled");
+    }
+    if (this.bodyEl && this.bodyEl.isConnected) {
+      this.bodyEl.empty();
+      this.renderBody(this.bodyEl);
+    }
+  }
+
+  private renderBody(body: HTMLElement) {
     const now = new Date();
     const todayStr = fmtDate(now);
     const data = this.heatmapService.getDataSync();

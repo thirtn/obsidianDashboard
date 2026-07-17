@@ -3,6 +3,7 @@ import { BaseComponent } from "./BaseComponent";
 import { DashboardSettings } from "../../types";
 import { RemotelySaveService, SyncSession } from "../../services/RemotelySaveService";
 import { FileService } from "../../services/FileService";
+import { formatRemoteType } from "./utils";
 
 export class RemotelySaveComponent extends BaseComponent {
   private remotelySaveService: RemotelySaveService;
@@ -21,6 +22,7 @@ export class RemotelySaveComponent extends BaseComponent {
     if (!plugins) return false;
     const manifests = plugins.manifests ?? {};
     if (!manifests["remotely-save"]) return false;
+    if (plugins.plugins?.["remotely-save"]) return true;
     const enabledSet: Set<string> | Record<string, boolean> = plugins.enabledPlugins ?? {};
     if (enabledSet instanceof Set) return enabledSet.has("remotely-save");
     return !!(enabledSet as Record<string, boolean>)["remotely-save"];
@@ -35,7 +37,7 @@ export class RemotelySaveComponent extends BaseComponent {
     const header = mod.createDiv("dashboard-module-header");
     const rsTitleWrap = header.createDiv("dashboard-module-title-wrap");
     rsTitleWrap.createEl("span", { text: "☁️", cls: "dashboard-module-icon" });
-    rsTitleWrap.createEl("span", { text: "OneDrive 同步", cls: "dashboard-module-title" });
+    rsTitleWrap.createEl("span", { text: "云同步记录", cls: "dashboard-module-title" });
 
     const body = mod.createDiv("dashboard-module-body dashboard-sync-body");
     const days = 7;
@@ -45,10 +47,14 @@ export class RemotelySaveComponent extends BaseComponent {
     ]);
 
     if (sessions.length === 0) {
-      body.createDiv({ text: "暂无 Remotely Save 同步记录", cls: "dashboard-git-mobile-hint" });
+      body.createDiv({ text: "暂无同步记录（依赖 Remotely Save 插件）", cls: "dashboard-git-mobile-hint" });
       return;
     }
 
+    const remoteLabel = formatRemoteType(sessions[0].remoteType);
+    if (remoteLabel && remoteLabel !== "未知") {
+      header.createEl("span", { text: remoteLabel, cls: "dashboard-module-badge" });
+    }
     header.createEl("span", { text: `共 ${totalCount} 次同步`, cls: "dashboard-module-badge" });
     const sessionList = body.createDiv("dashboard-sync-session-list");
 

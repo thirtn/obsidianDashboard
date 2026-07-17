@@ -22,9 +22,39 @@ __export(main_exports, {
   default: () => LLMWikiDashboardPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian20 = require("obsidian");
+var import_obsidian23 = require("obsidian");
 
 // src/types.ts
+var REPORT_LABELS = {
+  daily: "\u65E5\u62A5",
+  weekly: "\u5468\u62A5",
+  monthly: "\u6708\u62A5",
+  quarterly: "\u5B63\u62A5",
+  yearly: "\u5E74\u62A5"
+};
+var MODULE_IDS = [
+  "file-stats",
+  "heatmap",
+  "llm-command",
+  "operation-log",
+  "git-sync",
+  "remotely-save",
+  "task-quickadd",
+  "plugin-manage"
+];
+var MODULE_LABELS = {
+  "file-stats": "\u6587\u4EF6\u7EDF\u8BA1",
+  heatmap: "\u5DE5\u4F5C\u70ED\u529B\u56FE",
+  "llm-command": "LLM \u6307\u4EE4\u6267\u884C",
+  "operation-log": "\u64CD\u4F5C\u65E5\u5FD7",
+  "git-sync": "Git \u540C\u6B65",
+  "remotely-save": "\u4E91\u540C\u6B65\u8BB0\u5F55",
+  "task-quickadd": "\u5FEB\u901F\u6DFB\u52A0\u4EFB\u52A1",
+  "plugin-manage": "\u63D2\u4EF6\u7BA1\u7406"
+};
+function defaultModuleVisibility() {
+  return Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
+}
 var defaultReportConfigs = {
   daily: { enabled: true, confirmBeforeCreate: true, directory: "raw/dayReport", filenameFormat: "YYYY/MM/YYYY-MM-DD", templatePath: "raw/dayReport/template" },
   weekly: { enabled: false, confirmBeforeCreate: true, directory: "raw/weekReport", filenameFormat: "YYYY/MM/YYYY-[W]ww", templatePath: "raw/weekReport/template" },
@@ -62,14 +92,27 @@ var DEFAULT_SETTINGS = {
   gitPassword: "",
   gitAutoPushEnabled: false,
   gitAutoPushInterval: 30,
+  gitPollInterval: 30,
+  gitPushTimeout: 5,
   gitCommitTemplate: "auto: {{date}} {{time}}",
-  moduleOrder: ["file-stats", "heatmap", "llm-command", "git-sync", "remotely-save", "task-quickadd", "plugin-manage"],
+  moduleOrder: [
+    "file-stats",
+    "heatmap",
+    "llm-command",
+    "operation-log",
+    "git-sync",
+    "remotely-save",
+    "task-quickadd",
+    "plugin-manage"
+  ],
+  moduleVisibility: defaultModuleVisibility(),
+  openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
   tokenUsageDataPath: ".dashboard/token-usage.json"
 };
 
 // src/ui/DashboardView.ts
-var import_obsidian19 = require("obsidian");
+var import_obsidian22 = require("obsidian");
 
 // src/services/FileService.ts
 var import_obsidian = require("obsidian");
@@ -106,13 +149,25 @@ var FileService = class {
     const nosourceFilesArr = mdFiles.filter((f) => !filesWithSource.has(f.path));
     const orphanCount = orphanFilesArr.length;
     const nosourceCount = nosourceFilesArr.length;
-    const emptyChecks = await Promise.all(
-      mdFiles.map(async (f) => {
-        const content = await this.app.vault.cachedRead(f);
-        return { path: f.path, empty: content.trim().length === 0 };
-      })
+    const emptyFilesArr = [];
+    const maybeEmpty = mdFiles.filter((f) => f.stat.size === 0);
+    for (const f of maybeEmpty)
+      emptyFilesArr.push(f.path);
+    const smallFiles = mdFiles.filter(
+      (f) => f.stat.size > 0 && f.stat.size <= 256 && !emptyFilesArr.includes(f.path)
     );
-    const emptyFilesArr = emptyChecks.filter((c) => c.empty).map((c) => c.path);
+    if (smallFiles.length > 0) {
+      const checks = await Promise.all(
+        smallFiles.map(async (f) => {
+          const content = await this.app.vault.cachedRead(f);
+          return content.trim().length === 0 ? f.path : null;
+        })
+      );
+      for (const p of checks) {
+        if (p)
+          emptyFilesArr.push(p);
+      }
+    }
     const emptyCount = emptyFilesArr.length;
     const healthScore = this.calcHealthScore(mdFiles.length, orphanCount, nosourceCount, emptyCount);
     return {
@@ -171,6 +226,14 @@ var FileService = class {
   getRecentlyModified(limit = 5) {
     const mdFiles = this.app.vault.getFiles().filter((f) => f.extension === "md");
     return mdFiles.sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, limit).map((f) => ({ path: f.path, mtime: f.stat.mtime }));
+  }
+  getLatestInFolder(folderPrefix) {
+    const prefix = folderPrefix.replace(/^\/+|\/+$/g, "") + "/";
+    const files = this.app.vault.getFiles().filter((f2) => f2.path.startsWith(prefix)).sort((a, b) => b.stat.mtime - a.stat.mtime);
+    if (files.length === 0)
+      return null;
+    const f = files[0];
+    return { path: f.path, mtime: f.stat.mtime };
   }
   async toggleFolderInExplorer(name2) {
     var _a, _b, _c, _d, _e, _f;
@@ -389,34 +452,20 @@ var VaultPersistenceService = class {
 // src/services/LLMService.ts
 var LOCAL_STORAGE_KEY = "llm-wiki-dashboard-token-usage";
 var LLMService = class {
-  constructor(settings, vaultPath) {
+  constructor(app, settings, vaultPath) {
     this.settings = settings;
-    this.persistence = new VaultPersistenceService(null);
-    this.vaultPath = vaultPath || ".dashboard/token-usage.json";
-  }
-  /** Must be called after construction to wire up the vault adapter */
-  setApp(app) {
     this.persistence = new VaultPersistenceService(app);
+    this.vaultPath = vaultPath || ".dashboard/token-usage.json";
   }
   updateSettings(settings) {
     this.settings = settings;
   }
-  async executeCommand(command, input, onChunk) {
-    var _a, _b, _c, _d, _e, _f, _g;
-    const systemPrompts = {
-      ingest: "You are a knowledge ingestion assistant. Process the following content and extract key information for the wiki.",
-      query: "You are a wiki assistant. Answer the following question based on the knowledge base.",
-      "lint-wiki": "You are a wiki linter. Review the following content and suggest improvements for clarity, structure, and completeness."
-    };
-    const body = JSON.stringify({
-      model: this.settings.modelName,
-      temperature: this.settings.temperature,
-      max_tokens: this.settings.maxTokens,
-      messages: [
-        { role: "system", content: (_a = systemPrompts[command]) != null ? _a : "You are a helpful assistant." },
-        { role: "user", content: input }
-      ]
-    });
+  async executeCommand(command, input, onChunk, signal) {
+    var _a, _b, _c, _d, _e, _f;
+    if (onChunk) {
+      return this.executeCommandStreaming(command, input, onChunk, signal);
+    }
+    const body = this.buildRequestBody(command, input, false);
     const resp = await (0, import_obsidian4.requestUrl)({
       url: `${this.settings.apiBaseUrl}/chat/completions`,
       method: "POST",
@@ -424,25 +473,112 @@ var LLMService = class {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.settings.apiKey}`
       },
-      body,
+      body: JSON.stringify(body),
       throw: false
     });
-    if (resp.status === 401)
-      throw new Error("401: API Key \u65E0\u6548\uFF0C\u8BF7\u68C0\u67E5\u914D\u7F6E");
-    if (resp.status === 429)
-      throw new Error("429: \u8BF7\u6C42\u8FC7\u4E8E\u9891\u7E41\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
-    if (resp.status === 408 || resp.status === 504)
-      throw new Error("\u8D85\u65F6: \u8BF7\u6C42\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
-    if (resp.status >= 500)
-      throw new Error(`\u670D\u52A1\u5668\u9519\u8BEF (${resp.status})\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5`);
-    if (resp.status !== 200)
-      throw new Error(`\u8BF7\u6C42\u5931\u8D25 (${resp.status}): ${resp.text}`);
+    this.throwOnErrorStatus(resp.status, resp.text);
     const data = resp.json;
-    const content = (_e = (_d = (_c = (_b = data == null ? void 0 : data.choices) == null ? void 0 : _b[0]) == null ? void 0 : _c.message) == null ? void 0 : _d.content) != null ? _e : "";
-    const totalTokens = (_g = (_f = data == null ? void 0 : data.usage) == null ? void 0 : _f.total_tokens) != null ? _g : 0;
+    const content = (_d = (_c = (_b = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content) != null ? _d : "";
+    const totalTokens = (_f = (_e = data == null ? void 0 : data.usage) == null ? void 0 : _e.total_tokens) != null ? _f : 0;
     if (totalTokens > 0)
       this.recordLocalTokens(totalTokens);
     return content;
+  }
+  buildRequestBody(command, input, stream) {
+    var _a;
+    const systemPrompts = {
+      ingest: "You are a knowledge ingestion assistant. Process the following content and extract key information for the wiki.",
+      query: "You are a wiki assistant. Answer the following question based on the knowledge base.",
+      "lint-wiki": "You are a wiki linter. Review the following content and suggest improvements for clarity, structure, and completeness."
+    };
+    return {
+      model: this.settings.modelName,
+      temperature: this.settings.temperature,
+      max_tokens: this.settings.maxTokens,
+      stream,
+      messages: [
+        { role: "system", content: (_a = systemPrompts[command]) != null ? _a : "You are a helpful assistant." },
+        { role: "user", content: input }
+      ]
+    };
+  }
+  throwOnErrorStatus(status, text) {
+    if (status === 401)
+      throw new Error("401: API Key \u65E0\u6548\uFF0C\u8BF7\u68C0\u67E5\u914D\u7F6E");
+    if (status === 429)
+      throw new Error("429: \u8BF7\u6C42\u8FC7\u4E8E\u9891\u7E41\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+    if (status === 408 || status === 504)
+      throw new Error("\u8D85\u65F6: \u8BF7\u6C42\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+    if (status >= 500)
+      throw new Error(`\u670D\u52A1\u5668\u9519\u8BEF (${status})\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5`);
+    if (status !== 200)
+      throw new Error(`\u8BF7\u6C42\u5931\u8D25 (${status}): ${text}`);
+  }
+  async executeCommandStreaming(command, input, onChunk, signal) {
+    var _a, _b, _c, _d, _e, _f;
+    const url = `${this.settings.apiBaseUrl}/chat/completions`;
+    let resp;
+    try {
+      resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.settings.apiKey}`
+        },
+        body: JSON.stringify(this.buildRequestBody(command, input, true)),
+        signal
+      });
+    } catch (e) {
+      if ((e == null ? void 0 : e.name) === "AbortError")
+        throw e;
+      throw new Error("\u7F51\u7EDC\u9519\u8BEF: \u65E0\u6CD5\u8FDE\u63A5 API");
+    }
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      this.throwOnErrorStatus(resp.status, text);
+    }
+    if (!resp.body) {
+      throw new Error("\u6D41\u5F0F\u54CD\u5E94\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5 API \u662F\u5426\u652F\u6301 stream");
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    let totalTokens = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = (_a = lines.pop()) != null ? _a : "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:"))
+          continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]")
+          continue;
+        try {
+          const json = JSON.parse(payload);
+          const delta = (_e = (_d = (_c = (_b = json == null ? void 0 : json.choices) == null ? void 0 : _b[0]) == null ? void 0 : _c.delta) == null ? void 0 : _d.content) != null ? _e : "";
+          if (delta) {
+            full += delta;
+            onChunk(delta);
+          }
+          const usage = (_f = json == null ? void 0 : json.usage) == null ? void 0 : _f.total_tokens;
+          if (typeof usage === "number" && usage > 0)
+            totalTokens = usage;
+        } catch (e) {
+        }
+      }
+    }
+    if (totalTokens > 0) {
+      this.recordLocalTokens(totalTokens);
+    } else if (full.length > 0) {
+      this.recordLocalTokens(Math.max(1, Math.ceil(full.length / 4)));
+    }
+    return full;
   }
   async testConnection() {
     const resp = await (0, import_obsidian4.requestUrl)({
@@ -589,26 +725,29 @@ var PluginManageService = class {
     this.app = app;
   }
   getInstalledPlugins() {
-    var _a, _b;
+    var _a, _b, _c;
     const plugins = this.app.plugins;
     if (!plugins)
       return [];
     const manifests = (_a = plugins.manifests) != null ? _a : {};
-    const enabledSet = (_b = plugins.enabledPlugins) != null ? _b : {};
+    const instances = (_b = plugins.plugins) != null ? _b : {};
+    const enabledSet = (_c = plugins.enabledPlugins) != null ? _c : {};
     const isEnabled = (id) => {
+      if (instances[id])
+        return true;
       if (enabledSet instanceof Set)
         return enabledSet.has(id);
       return !!enabledSet[id];
     };
     return Object.entries(manifests).map(([id, manifest]) => {
-      var _a2, _b2, _c, _d;
+      var _a2, _b2, _c2, _d;
       return {
         id,
         name: (_a2 = manifest.name) != null ? _a2 : id,
         version: (_b2 = manifest.version) != null ? _b2 : "?",
         enabled: isEnabled(id),
         hasSettings: true,
-        description: (_d = (_c = ZH_DESCRIPTIONS[id]) != null ? _c : manifest.description) != null ? _d : ""
+        description: (_d = (_c2 = ZH_DESCRIPTIONS[id]) != null ? _c2 : manifest.description) != null ? _d : ""
       };
     }).sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -659,9 +798,28 @@ var HeatmapService = class {
     this.vaultPath = vaultPath || ".dashboard/heatmap.json";
   }
   startTracking() {
-    const handler = () => this.recordActivity();
-    this.app.vault.on("modify", handler);
-    this.unregister = () => this.app.vault.off("modify", handler);
+    let pending = null;
+    const handler = () => {
+      if (pending)
+        return;
+      pending = setTimeout(() => {
+        pending = null;
+        this.recordActivity();
+      }, 300);
+    };
+    const vault = this.app.vault;
+    vault.on("modify", handler);
+    vault.on("create", handler);
+    vault.on("rename", handler);
+    this.unregister = () => {
+      if (pending) {
+        clearTimeout(pending);
+        pending = null;
+      }
+      vault.off("modify", handler);
+      vault.off("create", handler);
+      vault.off("rename", handler);
+    };
   }
   stopTracking() {
     var _a;
@@ -751,68 +909,83 @@ var GitService = class {
   get isMobile() {
     return import_obsidian5.Platform.isMobile;
   }
-  exec(cmd) {
+  execArgs(args, opts = {}) {
+    var _a, _b, _c;
     if (this.isMobile) {
       throw new Error("Git \u64CD\u4F5C\u4EC5\u652F\u6301\u684C\u9762\u7AEF");
     }
-    const { execSync } = require("child_process");
+    const { execFileSync } = require("child_process");
     try {
-      const result = execSync(cmd, {
+      const execOpts = {
         cwd: this.vaultPath,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 3e4
-      }).toString();
-      return result;
+        encoding: opts.encoding === "buffer" ? void 0 : "utf-8",
+        maxBuffer: 10 * 1024 * 1024
+      };
+      const t = (_a = opts.timeout) != null ? _a : 3e4;
+      if (t > 0)
+        execOpts.timeout = t;
+      return execFileSync("git", args, execOpts);
     } catch (e) {
-      console.log(`[yyDashboard] exec failed (expected for --quiet checks): ${cmd}`);
-      throw new Error(e.stderr || e.message || "Git \u547D\u4EE4\u6267\u884C\u5931\u8D25");
+      const msg = (((_c = (_b = e.stderr) == null ? void 0 : _b.toString) == null ? void 0 : _c.call(_b)) || e.message || "Git \u547D\u4EE4\u6267\u884C\u5931\u8D25").trim();
+      const err = new Error(msg);
+      if (e.signal === "SIGTERM" || /ETIMEDOUT|timed out/i.test(msg)) {
+        err.code = "TIMEOUT";
+      }
+      throw err;
     }
   }
   async isGitRepo() {
     if (this.isMobile)
       return false;
     try {
-      this.exec("git rev-parse --is-inside-work-tree");
+      this.execArgs(["rev-parse", "--is-inside-work-tree"]);
       return true;
     } catch (e) {
       return false;
     }
   }
   async initRepo() {
-    this.exec("git init");
+    this.execArgs(["init"]);
   }
   async ensureRemote(url, name2) {
-    let isNew = false;
     try {
-      const existing = this.exec(`git remote get-url ${name2}`).trim();
-      if (existing !== url) {
-        this.exec(`git remote set-url ${name2} ${url}`);
+      const remotesRaw = this.execArgs(["remote", "-v"]).trim();
+      const lines = remotesRaw.split("\n");
+      const byUrl = {};
+      for (const line of lines) {
+        const m = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)/);
+        if (m)
+          byUrl[m[2]] = m[1];
+      }
+      if (byUrl[url] && byUrl[url] !== name2) {
+        return;
       }
     } catch (e) {
-      this.exec(`git remote add ${name2} ${url}`);
+    }
+    let isNew = false;
+    try {
+      const existing = this.execArgs(["remote", "get-url", name2]).trim();
+      if (existing !== url) {
+        this.execArgs(["remote", "set-url", name2, url]);
+      }
+    } catch (e) {
+      this.execArgs(["remote", "add", name2, url]);
       isNew = true;
     }
     if (isNew) {
       try {
-        this.exec(`git fetch ${name2}`);
+        this.execArgs(["fetch", name2]);
       } catch (e) {
       }
     }
   }
   async hasCommits() {
     try {
-      this.exec("git rev-parse HEAD");
+      this.execArgs(["rev-parse", "HEAD"]);
       return true;
     } catch (e) {
       return false;
     }
-  }
-  parsePorcelainPath(line) {
-    const clean = line.replace(/^\ufeff/, "");
-    const pathPart = clean.slice(2).replace(/^ +/, "");
-    const arrow = pathPart.indexOf(" -> ");
-    return arrow > -1 ? pathPart.slice(arrow + 4) : pathPart;
   }
   async getStatus(remoteName, branchName) {
     if (this.isMobile)
@@ -820,10 +993,10 @@ var GitService = class {
     let clean = true;
     let files = [];
     try {
-      const output = this.exec("git -c core.quotePath=false status --porcelain");
-      if (output.trim()) {
+      const statusFiles = await this.getStatusFiles();
+      if (statusFiles.length > 0) {
         clean = false;
-        files = output.trim().split(/\r?\n/).map((line) => this.parsePorcelainPath(line));
+        files = statusFiles.map((f) => f.path);
       }
     } catch (e) {
     }
@@ -832,19 +1005,25 @@ var GitService = class {
     try {
       if (remoteName && branchName) {
         try {
-          const counts = this.exec(
-            `git rev-list --left-right --count ${remoteName}/${branchName}...${branchName}`
-          );
+          const counts = this.execArgs([
+            "rev-list",
+            "--left-right",
+            "--count",
+            `${remoteName}/${branchName}...${branchName}`
+          ]);
           const parts = counts.trim().split("	");
           behind = parseInt(parts[0]) || 0;
           ahead = parseInt(parts[1]) || 0;
         } catch (e) {
         }
       } else {
-        const branch = this.exec("git rev-parse --abbrev-ref HEAD").trim();
-        const counts = this.exec(
-          `git rev-list --left-right --count ${branch}@{upstream}...${branch}`
-        );
+        const branch = this.execArgs(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+        const counts = this.execArgs([
+          "rev-list",
+          "--left-right",
+          "--count",
+          `${branch}@{upstream}...${branch}`
+        ]);
         const parts = counts.trim().split("	");
         behind = parseInt(parts[0]) || 0;
         ahead = parseInt(parts[1]) || 0;
@@ -857,103 +1036,97 @@ var GitService = class {
     if (this.isMobile)
       return [];
     try {
-      const output = this.exec("git -c core.quotePath=false status --porcelain");
-      if (!output.trim())
+      const buf = this.execArgs(
+        ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z"],
+        { encoding: "buffer" }
+      );
+      if (!buf || buf.length === 0)
         return [];
-      console.log("[yyDashboard] git status --porcelain raw output:", JSON.stringify(output));
-      const lines = output.trim().split(/\r?\n/);
-      if (lines.length > 0) {
-        console.log("[yyDashboard] first line charCodes:", JSON.stringify([...lines[0]].map((c) => c.charCodeAt(0))));
+      const output = buf.toString("utf-8");
+      const parts = output.split("\0").filter((p) => p.length > 0);
+      const files = [];
+      for (let i = 0; i < parts.length; i++) {
+        const entry = parts[i];
+        if (entry.length < 3)
+          continue;
+        const status = entry.slice(0, 2);
+        const path = entry.slice(3);
+        const staged = status[0] !== " " && status[0] !== "?";
+        files.push({ status, path, staged });
+        if (status[0] === "R" || status[0] === "C")
+          i++;
       }
-      const files = lines.map((line) => {
-        const cleanLine = line.replace(/^\ufeff/, "");
-        return {
-          status: cleanLine.slice(0, 2),
-          path: this.parsePorcelainPath(line),
-          staged: cleanLine[0] !== " " && cleanLine[0] !== "?"
-        };
-      });
-      console.log("[yyDashboard] getStatusFiles parsed:", JSON.stringify(files));
       return files;
     } catch (e) {
-      console.error("[yyDashboard] getStatusFiles failed:", e.message);
       return [];
     }
   }
   async stageFiles(files) {
-    console.log(`[yyDashboard] stageFiles called with ${files.length} files:`, JSON.stringify(files));
     const staged = [];
     const skipped = [];
     for (const f of files) {
-      if (!f || !f.trim()) {
-        console.log("[yyDashboard] Skipping empty/whitespace path");
+      if (!f || !f.trim())
         continue;
-      }
       try {
-        this.exec(`git add -- "${f.replace(/"/g, '\\"')}"`);
+        this.execArgs(["add", "--", f]);
         staged.push(f);
         continue;
-      } catch (e1) {
+      } catch (e) {
         try {
-          this.exec(`git rm --cached -- "${f.replace(/"/g, '\\"')}"`);
+          this.execArgs(["rm", "--cached", "--", f]);
           staged.push(f);
           continue;
-        } catch (e) {
+        } catch (e2) {
         }
         try {
-          this.exec(`git add -A -- "${f.replace(/"/g, '\\"')}"`);
+          this.execArgs(["add", "-A", "--", f]);
           staged.push(f);
           continue;
-        } catch (e) {
+        } catch (e2) {
         }
         try {
-          this.exec(`git add -f -- "${f.replace(/"/g, '\\"')}"`);
+          this.execArgs(["add", "-f", "--", f]);
           staged.push(f);
           continue;
-        } catch (e3) {
-          console.log(`[yyDashboard] Skipping file: "${f}", add error: ${e1.message}, rm error: ${e3.message}`);
+        } catch (e2) {
           skipped.push(f);
         }
       }
     }
-    console.log(`[yyDashboard] stageFiles result: staged=${staged.length}, skipped=${skipped.length}, skipped=`, JSON.stringify(skipped));
     if (staged.length === 0 && files.length > 0) {
       throw new Error("\u6CA1\u6709\u6587\u4EF6\u53EF\u4EE5\u6682\u5B58\uFF08\u6240\u6709\u6587\u4EF6\u5747\u5DF2\u4E0D\u5B58\u5728\uFF09");
     }
     return staged;
   }
   async restoreFiles(files) {
-    console.log("[yyDashboard] restoreFiles called with:", JSON.stringify(files));
     const restored = [];
     for (const f of files) {
       let ok = false;
       try {
-        this.exec(`git restore --staged -- "${f.replace(/"/g, '\\"')}"`);
+        this.execArgs(["restore", "--staged", "--", f]);
       } catch (e) {
       }
       try {
-        this.exec(`git restore -- "${f.replace(/"/g, '\\"')}"`);
+        this.execArgs(["restore", "--", f]);
         ok = true;
       } catch (e) {
       }
       if (!ok) {
         try {
-          this.exec(`git checkout HEAD -- "${f.replace(/"/g, '\\"')}"`);
+          this.execArgs(["checkout", "HEAD", "--", f]);
           ok = true;
         } catch (e) {
         }
       }
       if (!ok) {
         try {
-          this.exec(`git checkout -- "${f.replace(/"/g, '\\"')}"`);
+          this.execArgs(["checkout", "--", f]);
           ok = true;
         } catch (e) {
         }
       }
       if (ok) {
         restored.push(f);
-      } else {
-        console.log(`[yyDashboard] Failed to restore: ${f}`);
       }
     }
     if (restored.length === 0 && files.length > 0) {
@@ -963,56 +1136,81 @@ var GitService = class {
   }
   async commit(message) {
     try {
-      this.exec("git diff --cached --quiet");
+      this.execArgs(["diff", "--cached", "--quiet"]);
       return false;
     } catch (e) {
     }
-    this.exec(`git commit -m "${message.replace(/"/g, '\\"')}"`);
+    this.execArgs(["commit", "-m", message]);
     return true;
   }
   async stageAndCommit(message) {
-    this.exec("git add -A");
+    this.execArgs(["add", "-A"]);
     try {
-      this.exec("git diff --cached --quiet");
+      this.execArgs(["diff", "--cached", "--quiet"]);
       return false;
     } catch (e) {
     }
-    this.exec(`git commit -m "${message.replace(/"/g, '\\"')}"`);
+    this.execArgs(["commit", "-m", message]);
     return true;
   }
-  async push(remote, branch, username, password) {
-    if (username && password) {
-      const remoteUrl = this.exec(`git remote get-url ${remote}`).trim();
-      const authUrl = this.buildAuthUrl(remoteUrl, username, password);
-      this.exec(`git push ${authUrl} ${branch}`);
-    } else {
-      this.exec(`git push ${remote} ${branch}`);
+  async push(remote, branch, username, password, timeoutMinutes) {
+    const min = timeoutMinutes != null ? timeoutMinutes : 5;
+    const timeout = min > 0 ? min * 60 * 1e3 : 0;
+    const args = this.withAuthArgs(username, password);
+    args.push("push", "--set-upstream", remote, branch);
+    try {
+      this.execArgs(args, { timeout });
+      try {
+        this.execArgs(["fetch", remote, branch], { timeout: 3e4 });
+      } catch (e) {
+      }
+      return "\u63A8\u9001\u6210\u529F";
+    } catch (e) {
+      if ((e == null ? void 0 : e.code) === "TIMEOUT") {
+        const reconciled = this.verifyRemoteMatchesLocal(remote, branch, username, password);
+        if (reconciled) {
+          return "\u63A8\u9001\u6210\u529F\uFF08\u5BA2\u6237\u7AEF\u8D85\u65F6\uFF0C\u4F46\u670D\u52A1\u7AEF\u5DF2\u5B8C\u6210\uFF09";
+        }
+      }
+      throw e;
     }
-    return "\u63A8\u9001\u6210\u529F";
   }
-  async pull(remote, branch, username, password) {
-    if (username && password) {
-      const remoteUrl = this.exec(`git remote get-url ${remote}`).trim();
-      const authUrl = this.buildAuthUrl(remoteUrl, username, password);
-      const output2 = this.exec(`git pull ${authUrl} ${branch} --no-edit`);
-      return output2.trim() || "\u62C9\u53D6\u5B8C\u6210";
+  /** Fetch and check whether remote/branch tip equals local HEAD. Returns true if reconciled. */
+  verifyRemoteMatchesLocal(remote, branch, username, password) {
+    try {
+      const auth = this.withAuthArgs(username, password);
+      this.execArgs([...auth, "fetch", remote, branch], { timeout: 3e4 });
+      const localHead = this.execArgs(["rev-parse", "HEAD"]).trim();
+      const remoteHead = this.execArgs(["rev-parse", `${remote}/${branch}`]).trim();
+      return localHead === remoteHead && localHead.length > 0;
+    } catch (e) {
+      return false;
     }
-    const output = this.exec(`git pull ${remote} ${branch} --no-edit`);
+  }
+  async pull(remote, branch, username, password, timeoutMinutes) {
+    const min = timeoutMinutes != null ? timeoutMinutes : 5;
+    const timeout = min > 0 ? min * 60 * 1e3 : 0;
+    const args = this.withAuthArgs(username, password);
+    args.push("pull", remote, branch, "--no-edit");
+    const output = this.execArgs(args, { timeout });
     return output.trim() || "\u62C9\u53D6\u5B8C\u6210";
   }
-  async pushAll(remote, branch, message, username, password) {
-    const committed = await this.stageAndCommit(message);
-    if (!committed) {
-    }
-    return this.push(remote, branch, username, password);
+  /** Prefix git args with `-c http.extraHeader=...` for GitHub token auth, avoiding token in URL. */
+  withAuthArgs(username, password) {
+    if (!username || !password)
+      return [];
+    const basic = Buffer.from(`${username}:${password}`).toString("base64");
+    return ["-c", `http.extraHeader=Authorization: Basic ${basic}`];
+  }
+  async pushAll(remote, branch, message, username, password, timeoutMinutes) {
+    await this.stageAndCommit(message);
+    return this.push(remote, branch, username, password, timeoutMinutes);
   }
   async getRecentCommits(n) {
     if (this.isMobile)
       return [];
     try {
-      const output = this.exec(
-        `git log --format="%H%x00%an%x00%s%x00%ai" -n ${n}`
-      );
+      const output = this.execArgs(["log", "--format=%H%x00%an%x00%s%x00%ai", "-n", String(n)]);
       return output.trim().split("\n").filter(Boolean).map((line) => {
         const parts = line.split("\0");
         return { hash: parts[0].slice(0, 7), message: parts[2], date: parts[3], author: parts[1] };
@@ -1025,9 +1223,7 @@ var GitService = class {
     if (this.isMobile)
       return [];
     try {
-      const output = this.exec(
-        `git diff-tree --no-commit-id --name-only -r ${hash}`
-      );
+      const output = this.execArgs(["diff-tree", "--no-commit-id", "--name-only", "-r", hash]);
       return output.trim().split("\n").filter(Boolean);
     } catch (e) {
       return [];
@@ -1055,7 +1251,6 @@ var RemotelySaveService = class {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(new Error("\u65E0\u6CD5\u6253\u5F00 Remotely Save \u6570\u636E\u5E93"));
         req.onblocked = () => {
-          console.log("[yyDashboard] RS DB blocked \u2014 closing and retrying");
           if (req.result)
             req.result.close();
           reject(new Error("\u6570\u636E\u5E93\u88AB\u963B\u585E\uFF0C\u8BF7\u91CD\u8BD5"));
@@ -1090,7 +1285,6 @@ var RemotelySaveService = class {
     try {
       db = await this.openDB();
     } catch (e) {
-      console.log("[yyDashboard] Remotely Save DB not available:", e.message);
       return [];
     }
     return new Promise((resolve) => {
@@ -1121,7 +1315,6 @@ var RemotelySaveService = class {
         };
         tx.onerror = () => resolve(sessions);
       } catch (e) {
-        console.log("[yyDashboard] Error reading sync history:", e.message);
         resolve([]);
       }
     });
@@ -1165,8 +1358,144 @@ var RemotelySaveService = class {
   }
 };
 
+// src/services/ReportService.ts
+var import_obsidian6 = require("obsidian");
+var ReportService = class _ReportService {
+  constructor(app, settings) {
+    this.app = app;
+    this.settings = settings;
+  }
+  updateSettings(settings) {
+    this.settings = settings;
+  }
+  static formatMomentDate(date, format) {
+    const y = String(date.getFullYear());
+    const m = String(date.getMonth() + 1);
+    const d = String(date.getDate());
+    const temp = new Date(date.getTime());
+    temp.setHours(0, 0, 0, 0);
+    temp.setDate(temp.getDate() + 3 - (temp.getDay() + 6) % 7);
+    const week1 = new Date(temp.getFullYear(), 0, 4);
+    const w = String(
+      1 + Math.round(
+        ((temp.getTime() - week1.getTime()) / 864e5 - 3 + (week1.getDay() + 6) % 7) / 7
+      )
+    );
+    const Q = String(Math.floor(date.getMonth() / 3) + 1);
+    let result = format.replace(/\[([^\]]+)\]/g, "$1");
+    result = result.replace(/YYYY/g, y).replace(/YY/g, y.slice(2)).replace(/MM/g, m.padStart(2, "0")).replace(/DD/g, d.padStart(2, "0")).replace(/ww/g, w.padStart(2, "0")).replace(/M/g, m).replace(/D/g, d).replace(/w/g, w).replace(/Q/g, Q);
+    return result;
+  }
+  resolveReportPath(type, date) {
+    const cfg = this.settings.reportConfigs[type];
+    const relPath = _ReportService.formatMomentDate(date, cfg.filenameFormat);
+    const dir = cfg.directory.replace(/^\/+|\/+$/g, "");
+    return dir ? `${dir}/${relPath}.md` : `${relPath}.md`;
+  }
+  reportExists(type, date) {
+    const path = this.resolveReportPath(type, date);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof import_obsidian6.TFile;
+  }
+  /** Reference date for the current reporting period */
+  getPeriodDate(type, ref = /* @__PURE__ */ new Date()) {
+    switch (type) {
+      case "daily":
+        return new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+      case "weekly": {
+        const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+        d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+        return d;
+      }
+      case "monthly":
+        return new Date(ref.getFullYear(), ref.getMonth(), 1);
+      case "quarterly":
+        return new Date(ref.getFullYear(), Math.floor(ref.getMonth() / 3) * 3, 1);
+      case "yearly":
+        return new Date(ref.getFullYear(), 0, 1);
+    }
+  }
+  getMissingReports(ref = /* @__PURE__ */ new Date()) {
+    const missing = [];
+    for (const type of Object.keys(REPORT_LABELS)) {
+      const cfg = this.settings.reportConfigs[type];
+      if (!cfg.enabled)
+        continue;
+      const date = this.getPeriodDate(type, ref);
+      if (!this.reportExists(type, date)) {
+        missing.push({
+          type,
+          label: REPORT_LABELS[type],
+          path: this.resolveReportPath(type, date),
+          date
+        });
+      }
+    }
+    return missing;
+  }
+  async openOrCreateReport(type, date) {
+    const cfg = this.settings.reportConfigs[type];
+    const path = this.resolveReportPath(type, date);
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof import_obsidian6.TFile) {
+      await this.app.workspace.getLeaf(false).openFile(file);
+      return;
+    }
+    const doCreate = async () => {
+      let content = "";
+      if (cfg.templatePath) {
+        const tpl = this.app.vault.getAbstractFileByPath(`${cfg.templatePath}.md`);
+        if (tpl instanceof import_obsidian6.TFile) {
+          content = _ReportService.formatMomentDate(date, await this.app.vault.read(tpl));
+        }
+      }
+      const segs = path.split("/");
+      let acc = "";
+      for (let i = 0; i < segs.length - 1; i++) {
+        acc += (acc ? "/" : "") + segs[i];
+        if (!this.app.vault.getAbstractFileByPath(acc)) {
+          try {
+            await this.app.vault.createFolder(acc);
+          } catch (e) {
+          }
+        }
+      }
+      const created = await this.app.vault.create(path, content);
+      await this.app.workspace.getLeaf(false).openFile(created);
+    };
+    if (cfg.confirmBeforeCreate) {
+      const name2 = REPORT_LABELS[type];
+      new class extends import_obsidian6.Modal {
+        onOpen() {
+          this.contentEl.createEl("p", { text: `${name2}\u4E0D\u5B58\u5728\uFF0C\u662F\u5426\u65B0\u5EFA\uFF1F` });
+          this.contentEl.createEl("p", { text: path, cls: "dashboard-field-hint" });
+          const btns = this.contentEl.createDiv("dashboard-confirm-btns");
+          btns.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+          btns.createEl("button", { text: "\u65B0\u5EFA", cls: "mod-cta" }).addEventListener("click", async () => {
+            this.close();
+            try {
+              await doCreate();
+            } catch (e) {
+              new import_obsidian6.Notice(`\u521B\u5EFA\u5931\u8D25: ${e.message}`);
+            }
+          });
+        }
+        onClose() {
+          this.contentEl.empty();
+        }
+      }(this.app).open();
+    } else {
+      try {
+        await doCreate();
+      } catch (e) {
+        new import_obsidian6.Notice(`\u521B\u5EFA${REPORT_LABELS[type]}\u5931\u8D25: ${e.message}`);
+      }
+    }
+  }
+};
+
 // src/ui/components/HeaderComponent.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/ui/components/BaseComponent.ts
 var BaseComponent = class {
@@ -1206,8 +1535,8 @@ var BaseComponent = class {
 };
 
 // src/modals/ModelConfigModal.ts
-var import_obsidian6 = require("obsidian");
-var ModelConfigModal = class extends import_obsidian6.Modal {
+var import_obsidian7 = require("obsidian");
+var ModelConfigModal = class extends import_obsidian7.Modal {
   constructor(app, settings, onSave) {
     super(app);
     this.statusEl = null;
@@ -1266,7 +1595,7 @@ var ModelConfigModal = class extends import_obsidian6.Modal {
     saveBtn.addEventListener("click", () => {
       this.onSave(this.settings);
       this.close();
-      new import_obsidian6.Notice("\u6A21\u578B\u914D\u7F6E\u5DF2\u4FDD\u5B58");
+      new import_obsidian7.Notice("\u6A21\u578B\u914D\u7F6E\u5DF2\u4FDD\u5B58");
     });
     const btnRow = contentEl.createDiv("dashboard-modal-actions");
     btnRow.style.cssText = "justify-content:flex-end;";
@@ -1311,7 +1640,7 @@ var ModelConfigModal = class extends import_obsidian6.Modal {
   }
   async fetchModels() {
     var _a;
-    const resp = await (0, import_obsidian6.requestUrl)({
+    const resp = await (0, import_obsidian7.requestUrl)({
       url: `${this.settings.apiBaseUrl}/models`,
       method: "GET",
       headers: { Authorization: `Bearer ${this.settings.apiKey}` },
@@ -1377,10 +1706,333 @@ var ModelConfigModal = class extends import_obsidian6.Modal {
   }
 };
 
+// src/utils/lunar.ts
+function getLunarInfo(date) {
+  const ganzhi = getGanzhiYear(date);
+  const zodiac = getZodiac(date);
+  const [lm, ld] = getLunarDate(date);
+  return {
+    ganzhiYear: ganzhi,
+    zodiac,
+    lunarMonth: lm,
+    lunarDay: ld,
+    shichen: getShichen(date.getHours())
+  };
+}
+var HEAVENLY_STEMS = ["\u7532", "\u4E59", "\u4E19", "\u4E01", "\u620A", "\u5DF1", "\u5E9A", "\u8F9B", "\u58EC", "\u7678"];
+var EARTHLY_BRANCHES = ["\u5B50", "\u4E11", "\u5BC5", "\u536F", "\u8FB0", "\u5DF3", "\u5348", "\u672A", "\u7533", "\u9149", "\u620C", "\u4EA5"];
+var ZODIAC = ["\u9F20", "\u725B", "\u864E", "\u5154", "\u9F99", "\u86C7", "\u9A6C", "\u7F8A", "\u7334", "\u9E21", "\u72D7", "\u732A"];
+function getGanzhiYear(date) {
+  const year = getLunarYear(date);
+  const idx = (year - 4) % 60;
+  const stem = HEAVENLY_STEMS[idx % 10];
+  const branch = EARTHLY_BRANCHES[idx % 12];
+  return stem + branch;
+}
+function getZodiac(date) {
+  const year = getLunarYear(date);
+  return ZODIAC[(year - 4) % 12];
+}
+function getShichen(hour) {
+  const idx = Math.floor((hour + 1) % 24 / 2);
+  return EARTHLY_BRANCHES[idx] + "\u65F6";
+}
+var CN_NUM = ["\u96F6", "\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D", "\u4E03", "\u516B", "\u4E5D", "\u5341"];
+function lunarDayCn(day) {
+  if (day === 10)
+    return "\u521D\u5341";
+  if (day === 20)
+    return "\u4E8C\u5341";
+  if (day === 30)
+    return "\u4E09\u5341";
+  const prefix = day < 10 ? "\u521D" : day < 20 ? "\u5341" : day < 30 ? "\u5EFF" : "\u4E09\u5341";
+  const rem = day < 10 ? day : day < 20 ? day - 10 : day < 30 ? day - 20 : day - 30;
+  if (rem === 0)
+    return prefix;
+  return prefix + CN_NUM[rem];
+}
+function lunarMonthCn(month, leap) {
+  const names = ["\u6B63", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D", "\u4E03", "\u516B", "\u4E5D", "\u5341", "\u51AC", "\u814A"];
+  return (leap ? "\u95F0" : "") + names[month - 1] + "\u6708";
+}
+var LUNAR_INFO = [
+  19416,
+  19168,
+  42352,
+  21717,
+  53856,
+  55632,
+  91476,
+  22176,
+  39632,
+  21970,
+  19168,
+  42422,
+  42192,
+  53840,
+  119381,
+  46400,
+  54944,
+  44450,
+  38320,
+  84343,
+  18800,
+  42160,
+  46261,
+  27216,
+  27968,
+  109396,
+  11104,
+  38256,
+  21234,
+  18800,
+  25958,
+  54432,
+  59984,
+  28309,
+  23248,
+  11104,
+  100067,
+  37600,
+  116951,
+  51536,
+  54432,
+  120998,
+  46416,
+  22176,
+  107956,
+  9680,
+  37584,
+  53938,
+  43344,
+  46423,
+  27808,
+  46416,
+  86869,
+  19872,
+  42416,
+  83315,
+  21168,
+  43432,
+  59728,
+  27296,
+  44710,
+  43856,
+  19296,
+  43748,
+  42352,
+  21088,
+  62051,
+  55632,
+  23383,
+  22176,
+  38608,
+  19925,
+  19152,
+  42192,
+  54484,
+  53840,
+  54616,
+  46400,
+  46752,
+  103846,
+  38320,
+  18864,
+  43380,
+  42160,
+  45690,
+  27216,
+  27968,
+  44870,
+  43872,
+  38256,
+  19189,
+  18800,
+  25776,
+  29859,
+  59984,
+  27480,
+  21952,
+  43872,
+  38613,
+  37600,
+  51552,
+  55636,
+  54432,
+  55888,
+  30034,
+  22176,
+  43959,
+  9680,
+  37584,
+  51893,
+  43344,
+  46240,
+  47780,
+  44368,
+  21977,
+  19360,
+  42416,
+  86390,
+  21168,
+  43312,
+  31060,
+  27296,
+  44368,
+  23378,
+  19296,
+  42726,
+  42208,
+  53856,
+  60005,
+  54576,
+  23200,
+  30371,
+  38608,
+  19195,
+  19152,
+  42192,
+  118966,
+  53840,
+  54560,
+  56645,
+  46496,
+  22224,
+  21938,
+  18864,
+  42359,
+  42160,
+  43600,
+  111189,
+  27936,
+  44448,
+  84835,
+  37744,
+  18936,
+  18800,
+  25776,
+  92326,
+  59984,
+  27424,
+  108228,
+  43744,
+  41696,
+  53987,
+  51552,
+  54615,
+  54432,
+  55888,
+  23893,
+  22176,
+  42704,
+  21972,
+  21200,
+  43448,
+  43344,
+  46240,
+  46758,
+  44368,
+  21920,
+  43940,
+  42416,
+  21168,
+  45683,
+  26928,
+  29495,
+  27296,
+  44368,
+  84821,
+  19296,
+  42352,
+  21732,
+  53600,
+  59752,
+  54560,
+  55968,
+  92838,
+  22224,
+  19168,
+  43476,
+  41680,
+  53584,
+  62034,
+  54560
+];
+function daysBetween(y1, m1, d1, y2, m2, d2) {
+  const t1 = Date.UTC(y1, m1 - 1, d1);
+  const t2 = Date.UTC(y2, m2 - 1, d2);
+  return Math.round((t2 - t1) / 864e5);
+}
+function lunarYearDays(year) {
+  let sum = 348;
+  const info = LUNAR_INFO[year - 1900];
+  for (let i = 32768; i > 8; i >>= 1) {
+    sum += info & i ? 1 : 0;
+  }
+  return sum + leapDays(year);
+}
+function leapMonth(year) {
+  return LUNAR_INFO[year - 1900] & 15;
+}
+function leapDays(year) {
+  if (leapMonth(year) === 0)
+    return 0;
+  return LUNAR_INFO[year - 1900] & 65536 ? 30 : 29;
+}
+function monthDays(year, month) {
+  return LUNAR_INFO[year - 1900] & 65536 >> month ? 30 : 29;
+}
+function solarToLunar(date) {
+  let offset = daysBetween(1900, 1, 31, date.getFullYear(), date.getMonth() + 1, date.getDate());
+  let year = 1900;
+  let temp = 0;
+  while (year < 2101 && offset > 0) {
+    temp = lunarYearDays(year);
+    if (offset < temp)
+      break;
+    offset -= temp;
+    year++;
+  }
+  const leap = leapMonth(year);
+  let isLeap = false;
+  let month = 1;
+  temp = 0;
+  while (month < 13 && offset >= 0) {
+    if (leap > 0 && month === leap + 1 && !isLeap) {
+      month--;
+      isLeap = true;
+      temp = leapDays(year);
+    } else {
+      temp = monthDays(year, month);
+    }
+    if (isLeap && month === leap + 1)
+      isLeap = false;
+    offset -= temp;
+    if (offset < 0) {
+      offset += temp;
+      break;
+    }
+    month++;
+  }
+  const day = offset + 1;
+  return { year, month, day, leap: isLeap };
+}
+function getLunarYear(date) {
+  return solarToLunar(date).year;
+}
+function getLunarDate(date) {
+  const { month, day, leap } = solarToLunar(date);
+  return [lunarMonthCn(month, leap), lunarDayCn(day)];
+}
+
 // src/ui/components/HeaderComponent.ts
 var HeaderComponent = class _HeaderComponent extends BaseComponent {
   constructor(app, settings, llmService, onSettingsChange, onRefresh) {
     super(app, settings);
+    this.tokenBarEl = null;
+    this.clockEl = null;
+    this.lunarEl = null;
+    this.clockTimer = null;
     this.llmService = llmService;
     this.onSettingsChange = onSettingsChange;
     this.onRefresh = onRefresh;
@@ -1412,12 +2064,63 @@ var HeaderComponent = class _HeaderComponent extends BaseComponent {
     if (obsVersion) {
       metaRow.createEl("span", { text: `Obsidian v${obsVersion}`, cls: "dashboard-version-label" });
     }
+    this.clockEl = metaRow.createEl("span", {
+      text: _HeaderComponent.fmtClock(/* @__PURE__ */ new Date()),
+      cls: "dashboard-clock"
+    });
+    this.lunarEl = metaRow.createEl("span", {
+      text: _HeaderComponent.fmtLunar(/* @__PURE__ */ new Date()),
+      cls: "dashboard-lunar"
+    });
+    this.startClock();
     this.renderTokenBar(header);
+  }
+  startClock() {
+    if (this.clockTimer !== null)
+      window.clearInterval(this.clockTimer);
+    let lastLunarKey = "";
+    this.clockTimer = window.setInterval(() => {
+      if (!this.clockEl || !this.clockEl.isConnected) {
+        if (this.clockTimer !== null) {
+          window.clearInterval(this.clockTimer);
+          this.clockTimer = null;
+        }
+        return;
+      }
+      const now = /* @__PURE__ */ new Date();
+      this.clockEl.textContent = _HeaderComponent.fmtClock(now);
+      const key = `${now.toDateString()}#${now.getHours()}`;
+      if (this.lunarEl && key !== lastLunarKey) {
+        this.lunarEl.textContent = _HeaderComponent.fmtLunar(now);
+        lastLunarKey = key;
+      }
+    }, 1e3);
+  }
+  destroy() {
+    if (this.clockTimer !== null) {
+      window.clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
+    this.clockEl = null;
+    this.lunarEl = null;
+    super.destroy();
+  }
+  static fmtLunar(d) {
+    const info = getLunarInfo(d);
+    return `${info.ganzhiYear}${info.zodiac}\u5E74\xB7\u519C\u5386${info.lunarMonth}${info.lunarDay}\xB7${info.shichen}`;
+  }
+  static fmtClock(d) {
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = d.getFullYear();
+    const m = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const w = ["\u65E5", "\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D"][d.getDay()];
+    return `${y}-${m}-${day} \u5468${w} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
   renderTokenBar(header) {
     var _a;
     const bar = header.createDiv("dashboard-header-token");
-    bar.setAttribute("id", "dashboard-token-bar");
+    this.tokenBarEl = bar;
     let today = 0, thisMonth = 0;
     try {
       const store = this.loadLocalTokenStore();
@@ -1441,35 +2144,26 @@ var HeaderComponent = class _HeaderComponent extends BaseComponent {
       (async () => {
         var _a2;
         try {
-          const resp = await (0, import_obsidian7.requestUrl)({
+          const resp = await (0, import_obsidian8.requestUrl)({
             url: this.settings.tokenBalanceApiUrl,
             method: "GET",
             headers: { Authorization: `Bearer ${this.settings.apiKey}` },
             throw: false
           });
-          console.log("[Dashboard] \u4F59\u989DAPI status:", resp.status);
-          if (resp.status === 200) {
-            console.log("[Dashboard] \u4F59\u989DAPI body:", JSON.stringify(resp.json));
-            if ((_a2 = resp.json) == null ? void 0 : _a2.balance_infos) {
-              for (const item of resp.json.balance_infos) {
-                makeChip(`\u4F59\u989D(${item.currency})`, item.total_balance);
-              }
-            } else {
-              console.log("[Dashboard] \u4F59\u989DAPI \u7F3A\u5C11 balance_infos \u5B57\u6BB5");
+          if (resp.status === 200 && ((_a2 = resp.json) == null ? void 0 : _a2.balance_infos)) {
+            for (const item of resp.json.balance_infos) {
+              makeChip(`\u4F59\u989D(${item.currency})`, item.total_balance);
             }
-          } else {
-            console.log("[Dashboard] \u4F59\u989DAPI \u8BF7\u6C42\u5931\u8D25, status:", resp.status);
           }
         } catch (e) {
-          console.log("[Dashboard] \u4F59\u989DAPI \u5F02\u5E38:", e);
         }
       })();
     }
   }
   async refreshTokenBar() {
     var _a;
-    const bar = document.getElementById("dashboard-token-bar");
-    if (!bar)
+    const bar = this.tokenBarEl;
+    if (!bar || !bar.isConnected)
       return;
     let today = 0, thisMonth = 0;
     try {
@@ -1523,14 +2217,16 @@ var HeaderComponent = class _HeaderComponent extends BaseComponent {
 };
 
 // src/ui/components/SearchComponent.ts
-var import_obsidian8 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 var SearchComponent = class extends BaseComponent {
   constructor() {
     super(...arguments);
     this.index = [];
+    this.indexDirty = true;
     this.searchInput = null;
     this.resultDropdown = null;
     this.blurTimer = null;
+    this.vaultHandler = null;
   }
   get id() {
     return "search";
@@ -1543,10 +2239,11 @@ var SearchComponent = class extends BaseComponent {
     });
     this.resultDropdown = searchWrap.createDiv("dashboard-search-dropdown");
     this.resultDropdown.style.display = "none";
-    this.buildIndex();
+    this.ensureVaultListeners();
+    this.ensureIndex();
     this.searchInput.addEventListener("input", () => this.doSearch());
     this.searchInput.addEventListener("focus", () => {
-      this.buildIndex();
+      this.ensureIndex();
       this.doSearch();
     });
     this.searchInput.addEventListener("blur", () => {
@@ -1569,7 +2266,38 @@ var SearchComponent = class extends BaseComponent {
     });
   }
   async update(_data) {
+    this.indexDirty = true;
+  }
+  destroy() {
+    if (this.vaultHandler) {
+      this.app.vault.off("create", this.vaultHandler);
+      this.app.vault.off("delete", this.vaultHandler);
+      this.app.vault.off("rename", this.vaultHandler);
+      this.app.metadataCache.off("changed", this.vaultHandler);
+      this.vaultHandler = null;
+    }
+    if (this.blurTimer) {
+      clearTimeout(this.blurTimer);
+      this.blurTimer = null;
+    }
+    super.destroy();
+  }
+  ensureVaultListeners() {
+    if (this.vaultHandler)
+      return;
+    this.vaultHandler = () => {
+      this.indexDirty = true;
+    };
+    this.app.vault.on("create", this.vaultHandler);
+    this.app.vault.on("delete", this.vaultHandler);
+    this.app.vault.on("rename", this.vaultHandler);
+    this.app.metadataCache.on("changed", this.vaultHandler);
+  }
+  ensureIndex() {
+    if (!this.indexDirty)
+      return;
     this.buildIndex();
+    this.indexDirty = false;
   }
   buildIndex() {
     var _a;
@@ -1715,7 +2443,7 @@ var SearchComponent = class extends BaseComponent {
         if (this.searchInput)
           this.searchInput.value = "";
         const f = this.app.vault.getAbstractFileByPath(entry.path);
-        if (f instanceof import_obsidian8.TFile)
+        if (f instanceof import_obsidian9.TFile)
           await this.app.workspace.getLeaf(false).openFile(f);
       });
     }
@@ -1723,63 +2451,8 @@ var SearchComponent = class extends BaseComponent {
   }
 };
 
-// src/ui/components/FileStatsComponent.ts
+// src/ui/components/WorkspaceBarComponent.ts
 var import_obsidian10 = require("obsidian");
-
-// src/modals/FolderConfigModal.ts
-var import_obsidian9 = require("obsidian");
-var FolderConfigModal = class extends import_obsidian9.Modal {
-  constructor(app, settings, fileService, onSave) {
-    super(app);
-    this.settings = { ...settings };
-    this.fileService = fileService;
-    this.onSave = onSave;
-    this.selected = new Set(settings.trackedFolders);
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("dashboard-modal");
-    contentEl.createEl("h2", { text: "\u7EDF\u8BA1\u6587\u4EF6\u5939\u914D\u7F6E" });
-    contentEl.createEl("p", {
-      text: "\u9009\u62E9\u9700\u8981\u5355\u72EC\u7EDF\u8BA1\u6570\u91CF\u7684\u6587\u4EF6\u5939\u3002\u672A\u9009\u4E2D\u7684\u6587\u4EF6\u5939\u4ECD\u8BA1\u5165 Vault \u603B\u6570\u3002",
-      cls: "dashboard-modal-desc"
-    });
-    const vaultPaths = this.fileService.getFolderPaths();
-    const allPaths = [.../* @__PURE__ */ new Set([...vaultPaths, ...this.settings.trackedFolders])].sort();
-    const checkboxWrap = contentEl.createDiv("dashboard-checkbox-grid");
-    const existingSet = new Set(vaultPaths);
-    for (const path of allPaths) {
-      const exists = existingSet.has(path);
-      const label = checkboxWrap.createEl("label", { cls: "dashboard-checkbox-label" });
-      const cb = label.createEl("input", { type: "checkbox" });
-      cb.checked = this.selected.has(path);
-      label.appendText(path);
-      if (!exists) {
-        label.createEl("span", { text: " (\u4E0D\u5B58\u5728)", cls: "dashboard-checkbox-missing" });
-      }
-      cb.addEventListener("change", () => {
-        if (cb.checked)
-          this.selected.add(path);
-        else
-          this.selected.delete(path);
-      });
-    }
-    const actions = contentEl.createDiv("dashboard-modal-actions");
-    actions.style.cssText = "justify-content:flex-end;";
-    actions.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
-    const saveBtn = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
-    saveBtn.addEventListener("click", () => {
-      this.settings.trackedFolders = [...this.selected];
-      this.onSave(this.settings);
-      this.close();
-      new import_obsidian9.Notice("\u6587\u4EF6\u5939\u914D\u7F6E\u5DF2\u4FDD\u5B58");
-    });
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-};
 
 // src/ui/components/utils.ts
 function formatRelativeTime(mtime) {
@@ -1840,11 +2513,192 @@ function attachFileListPopover(trigger, files, title, onFileClick) {
     hideTimer = setTimeout(remove, 200);
   });
 }
+var MODULE_COLLAPSE_KEY = "llm-wiki-dashboard-module-collapsed";
+function loadModuleCollapsed() {
+  try {
+    const raw = localStorage.getItem(MODULE_COLLAPSE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+function isModuleCollapsed(moduleId) {
+  return !!loadModuleCollapsed()[moduleId];
+}
+function setModuleCollapsed(moduleId, collapsed) {
+  const state = loadModuleCollapsed();
+  if (collapsed)
+    state[moduleId] = true;
+  else
+    delete state[moduleId];
+  localStorage.setItem(MODULE_COLLAPSE_KEY, JSON.stringify(state));
+}
+var LAST_LLM_OUTPUT_KEY = "llm-wiki-dashboard-last-output";
+function loadLastLlmOutput() {
+  try {
+    const raw = localStorage.getItem(LAST_LLM_OUTPUT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function formatRemoteType(remoteType) {
+  var _a;
+  if (!remoteType)
+    return "\u672A\u77E5";
+  const map = {
+    onedrive: "OneDrive",
+    dropbox: "Dropbox",
+    webdav: "WebDAV",
+    s3: "S3",
+    googledrive: "Google Drive",
+    box: "Box",
+    pcloud: "pCloud",
+    yandexdisk: "Yandex Disk",
+    koofr: "Koofr",
+    azureblobstorage: "Azure Blob"
+  };
+  const key = remoteType.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (_a = map[key]) != null ? _a : remoteType;
+}
+
+// src/ui/components/WorkspaceBarComponent.ts
+var WorkspaceBarComponent = class extends BaseComponent {
+  constructor(app, settings, fileService, reportService) {
+    super(app, settings);
+    this.fileService = fileService;
+    this.reportService = reportService;
+  }
+  get id() {
+    return "workspace-bar";
+  }
+  updateSettings(settings) {
+    super.updateSettings(settings);
+    this.reportService.updateSettings(settings);
+  }
+  async render(container) {
+    var _a, _b;
+    const bar = container.createDiv("dashboard-workspace-bar");
+    const section = (label) => {
+      const block = bar.createDiv("dashboard-workspace-section");
+      block.createEl("span", { text: label, cls: "dashboard-workspace-label" });
+      return block.createDiv("dashboard-workspace-items");
+    };
+    const reportItems = section("\u4ECA\u65E5");
+    const dailyCfg = this.settings.reportConfigs.daily;
+    if (dailyCfg.enabled) {
+      const today = /* @__PURE__ */ new Date();
+      const path = this.reportService.resolveReportPath("daily", today);
+      const exists = this.app.vault.getAbstractFileByPath(path) instanceof import_obsidian10.TFile;
+      const btn = reportItems.createEl("button", {
+        text: exists ? "\u{1F4D3} \u6253\u5F00\u65E5\u62A5" : "\u{1F4D3} \u65B0\u5EFA\u65E5\u62A5",
+        cls: "dashboard-workspace-chip"
+      });
+      btn.addEventListener("click", () => this.reportService.openOrCreateReport("daily", today));
+    } else {
+      reportItems.createEl("span", { text: "\u65E5\u62A5\u672A\u542F\u7528", cls: "dashboard-workspace-muted" });
+    }
+    const recentItems = section("\u6700\u8FD1\u4FEE\u6539");
+    const recent = this.fileService.getRecentlyModified(3);
+    if (recent.length === 0) {
+      recentItems.createEl("span", { text: "\u65E0", cls: "dashboard-workspace-muted" });
+    } else {
+      for (const rf of recent) {
+        const chip = recentItems.createEl("button", {
+          cls: "dashboard-workspace-chip",
+          title: rf.path
+        });
+        const name2 = (_a = rf.path.split("/").pop()) != null ? _a : rf.path;
+        chip.createEl("span", { text: name2, cls: "dashboard-workspace-chip-name" });
+        chip.createEl("span", { text: formatRelativeTime(rf.mtime), cls: "dashboard-workspace-chip-time" });
+        chip.addEventListener("click", () => this.fileService.openFile(rf.path));
+      }
+    }
+    const llmItems = section("\u4E0A\u6B21 LLM \u8F93\u51FA");
+    const lastStored = loadLastLlmOutput();
+    const storedRecent = (lastStored == null ? void 0 : lastStored.path) && this.app.vault.getAbstractFileByPath(lastStored.path) instanceof import_obsidian10.TFile ? { path: lastStored.path, mtime: lastStored.time } : null;
+    const latestOutput = storedRecent != null ? storedRecent : this.fileService.getLatestInFolder("outputs");
+    if (!latestOutput) {
+      llmItems.createEl("span", { text: "\u6682\u65E0 outputs \u6587\u4EF6", cls: "dashboard-workspace-muted" });
+    } else {
+      const chip = llmItems.createEl("button", { cls: "dashboard-workspace-chip", title: latestOutput.path });
+      chip.createEl("span", {
+        text: (_b = latestOutput.path.split("/").pop()) != null ? _b : latestOutput.path,
+        cls: "dashboard-workspace-chip-name"
+      });
+      chip.createEl("span", {
+        text: formatRelativeTime(latestOutput.mtime),
+        cls: "dashboard-workspace-chip-time"
+      });
+      chip.addEventListener("click", () => this.fileService.openFile(latestOutput.path));
+    }
+  }
+};
+
+// src/ui/components/FileStatsComponent.ts
+var import_obsidian12 = require("obsidian");
+
+// src/modals/FolderConfigModal.ts
+var import_obsidian11 = require("obsidian");
+var FolderConfigModal = class extends import_obsidian11.Modal {
+  constructor(app, settings, fileService, onSave) {
+    super(app);
+    this.settings = { ...settings };
+    this.fileService = fileService;
+    this.onSave = onSave;
+    this.selected = new Set(settings.trackedFolders);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("dashboard-modal");
+    contentEl.createEl("h2", { text: "\u7EDF\u8BA1\u6587\u4EF6\u5939\u914D\u7F6E" });
+    contentEl.createEl("p", {
+      text: "\u9009\u62E9\u9700\u8981\u5355\u72EC\u7EDF\u8BA1\u6570\u91CF\u7684\u6587\u4EF6\u5939\u3002\u672A\u9009\u4E2D\u7684\u6587\u4EF6\u5939\u4ECD\u8BA1\u5165 Vault \u603B\u6570\u3002",
+      cls: "dashboard-modal-desc"
+    });
+    const vaultPaths = this.fileService.getFolderPaths();
+    const allPaths = [.../* @__PURE__ */ new Set([...vaultPaths, ...this.settings.trackedFolders])].sort();
+    const checkboxWrap = contentEl.createDiv("dashboard-checkbox-grid");
+    const existingSet = new Set(vaultPaths);
+    for (const path of allPaths) {
+      const exists = existingSet.has(path);
+      const label = checkboxWrap.createEl("label", { cls: "dashboard-checkbox-label" });
+      const cb = label.createEl("input", { type: "checkbox" });
+      cb.checked = this.selected.has(path);
+      label.appendText(path);
+      if (!exists) {
+        label.createEl("span", { text: " (\u4E0D\u5B58\u5728)", cls: "dashboard-checkbox-missing" });
+      }
+      cb.addEventListener("change", () => {
+        if (cb.checked)
+          this.selected.add(path);
+        else
+          this.selected.delete(path);
+      });
+    }
+    const actions = contentEl.createDiv("dashboard-modal-actions");
+    actions.style.cssText = "justify-content:flex-end;";
+    actions.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+    const saveBtn = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
+    saveBtn.addEventListener("click", () => {
+      this.settings.trackedFolders = [...this.selected];
+      this.onSave(this.settings);
+      this.close();
+      new import_obsidian11.Notice("\u6587\u4EF6\u5939\u914D\u7F6E\u5DF2\u4FDD\u5B58");
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 
 // src/ui/components/FileStatsComponent.ts
 var FileStatsComponent = class extends BaseComponent {
   constructor(app, settings, onSettingsChange) {
     super(app, settings);
+    this.statsContainer = null;
+    this.recentContainer = null;
     this.fileService = new FileService(app);
     this.onSettingsChange = onSettingsChange;
   }
@@ -1866,10 +2720,18 @@ var FileStatsComponent = class extends BaseComponent {
       }).open();
     });
     const body = mod.createDiv("dashboard-module-body");
-    const statsContainer = body.createDiv({ attr: { id: "dashboard-file-stats-container" } });
-    await this.renderFileStats(statsContainer);
-    const recentContainer = body.createDiv({ cls: "dashboard-recent-section", attr: { id: "dashboard-recent-container" } });
-    this.renderRecentFiles(recentContainer);
+    this.statsContainer = body.createDiv();
+    await this.renderFileStats(this.statsContainer);
+    this.recentContainer = body.createDiv({ cls: "dashboard-recent-section" });
+    this.renderRecentFiles(this.recentContainer);
+  }
+  async refreshExternal() {
+    if (this.statsContainer && this.statsContainer.isConnected) {
+      await this.renderFileStats(this.statsContainer);
+    }
+    if (this.recentContainer && this.recentContainer.isConnected) {
+      this.renderRecentFiles(this.recentContainer);
+    }
   }
   async renderFileStats(container) {
     container.empty();
@@ -1922,7 +2784,7 @@ var FileStatsComponent = class extends BaseComponent {
       const nameEl = row.createEl("span", { text: rf.path, cls: "dashboard-recent-path", title: rf.path });
       nameEl.addEventListener("click", () => {
         const f = this.app.vault.getAbstractFileByPath(rf.path);
-        if (f instanceof import_obsidian10.TFile)
+        if (f instanceof import_obsidian12.TFile)
           this.app.workspace.getLeaf(false).openFile(f);
       });
       row.createEl("span", { text: formatRelativeTime(rf.mtime), cls: "dashboard-recent-time" });
@@ -1934,18 +2796,18 @@ var FileStatsComponent = class extends BaseComponent {
       return;
     attachFileListPopover(badge, files, tooltip != null ? tooltip : text, (filePath) => {
       const f = this.app.vault.getAbstractFileByPath(filePath);
-      if (f instanceof import_obsidian10.TFile)
+      if (f instanceof import_obsidian12.TFile)
         this.app.workspace.getLeaf(false).openFile(f);
     });
   }
 };
 
 // src/ui/components/HeatmapComponent.ts
-var import_obsidian12 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // src/modals/ReportConfigModal.ts
-var import_obsidian11 = require("obsidian");
-var REPORT_LABELS = {
+var import_obsidian13 = require("obsidian");
+var REPORT_LABELS2 = {
   daily: "\u65E5\u62A5",
   weekly: "\u5468\u62A5",
   monthly: "\u6708\u62A5",
@@ -1960,7 +2822,7 @@ var EXAMPLE = {
   quarterly: "YYYY/MM/YYYY-[Q]Q",
   yearly: "YYYY/YYYY"
 };
-var ReportConfigModal = class extends import_obsidian11.Modal {
+var ReportConfigModal = class extends import_obsidian13.Modal {
   constructor(app, configs, onSave) {
     super(app);
     this.onSave = onSave;
@@ -1972,7 +2834,7 @@ var ReportConfigModal = class extends import_obsidian11.Modal {
     const dirSet = /* @__PURE__ */ new Set();
     dirSet.add("");
     for (const f of this.app.vault.getAllLoadedFiles()) {
-      if (f instanceof import_obsidian11.TFolder)
+      if (f instanceof import_obsidian13.TFolder)
         dirSet.add(f.path);
     }
     this.folders = [...dirSet].sort();
@@ -1993,9 +2855,9 @@ var ReportConfigModal = class extends import_obsidian11.Modal {
       }
       this.renderTabContent(panel, type);
     };
-    for (const type of Object.keys(REPORT_LABELS)) {
+    for (const type of Object.keys(REPORT_LABELS2)) {
       const tab = tabBar.createEl("button", {
-        text: REPORT_LABELS[type],
+        text: REPORT_LABELS2[type],
         cls: "dashboard-report-tab"
       });
       tab.addEventListener("click", () => showTab(type));
@@ -2010,7 +2872,7 @@ var ReportConfigModal = class extends import_obsidian11.Modal {
     saveBtn.addEventListener("click", () => {
       this.onSave(this.configs);
       this.close();
-      new import_obsidian11.Notice("\u62A5\u8868\u914D\u7F6E\u5DF2\u4FDD\u5B58");
+      new import_obsidian13.Notice("\u62A5\u8868\u914D\u7F6E\u5DF2\u4FDD\u5B58");
     });
   }
   renderTabContent(panel, type) {
@@ -2122,6 +2984,9 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
   constructor(app, settings, heatmapService, onSettingsChange) {
     super(app, settings);
     this.currentYear = (/* @__PURE__ */ new Date()).getFullYear();
+    this.bodyEl = null;
+    this.yearLabelEl = null;
+    this.nextBtnEl = null;
     // ── Report helpers ──
     this.REPORT_NAMES = {
       daily: "\u65E5\u62A5",
@@ -2137,7 +3002,6 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
     return "heatmap";
   }
   async render(container) {
-    var _a;
     const mod = container.createDiv("dashboard-module");
     const header = mod.createDiv("dashboard-module-header");
     const hmTitleWrap = header.createDiv("dashboard-module-title-wrap");
@@ -2146,12 +3010,14 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
     const yearNav = header.createDiv("dashboard-heatmap-year-nav");
     const prevBtn = yearNav.createEl("span", { text: "\u25C0", cls: "dashboard-heatmap-year-arrow" });
     const yearLabel = yearNav.createEl("span", { text: String(this.currentYear), cls: "dashboard-heatmap-year-label clickable" });
+    this.yearLabelEl = yearLabel;
     yearLabel.addEventListener("click", () => {
       if (this.settings.reportConfigs.yearly.enabled) {
         this.openOrCreateReport("yearly", new Date(this.currentYear, 0, 1));
       }
     });
     const nextBtn = yearNav.createEl("span", { text: "\u25B6", cls: "dashboard-heatmap-year-arrow" });
+    this.nextBtnEl = nextBtn;
     const cfgBtn = yearNav.createEl("button", { cls: "dashboard-heatmap-config-btn", title: "\u65E5\u62A5/\u5468\u62A5\u914D\u7F6E" });
     cfgBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
     cfgBtn.addEventListener("click", () => {
@@ -2165,15 +3031,35 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
       nextBtn.addClass("disabled");
     prevBtn.addEventListener("click", () => {
       this.currentYear--;
-      this.render(container);
+      this.refreshYear();
     });
     nextBtn.addEventListener("click", () => {
       if (this.currentYear < thisYear) {
         this.currentYear++;
-        this.render(container);
+        this.refreshYear();
       }
     });
     const body = mod.createDiv("dashboard-module-body");
+    this.bodyEl = body;
+    this.renderBody(body);
+  }
+  refreshYear() {
+    if (this.yearLabelEl)
+      this.yearLabelEl.textContent = String(this.currentYear);
+    if (this.nextBtnEl) {
+      const thisYear = (/* @__PURE__ */ new Date()).getFullYear();
+      if (this.currentYear >= thisYear)
+        this.nextBtnEl.addClass("disabled");
+      else
+        this.nextBtnEl.removeClass("disabled");
+    }
+    if (this.bodyEl && this.bodyEl.isConnected) {
+      this.bodyEl.empty();
+      this.renderBody(this.bodyEl);
+    }
+  }
+  renderBody(body) {
+    var _a;
     const now = /* @__PURE__ */ new Date();
     const todayStr = fmtDate(now);
     const data = this.heatmapService.getDataSync();
@@ -2286,7 +3172,7 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
     const cfg = this.settings.reportConfigs[type];
     const path = this.resolveReportPath(type, date);
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof import_obsidian12.TFile) {
+    if (file instanceof import_obsidian14.TFile) {
       await this.app.workspace.getLeaf(false).openFile(file);
       return;
     }
@@ -2294,7 +3180,7 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
       let content = "";
       if (cfg.templatePath) {
         const tpl = this.app.vault.getAbstractFileByPath(`${cfg.templatePath}.md`);
-        if (tpl instanceof import_obsidian12.TFile)
+        if (tpl instanceof import_obsidian14.TFile)
           content = _HeatmapComponent.formatMomentDate(date, await this.app.vault.read(tpl));
       }
       const segs = path.split("/");
@@ -2313,7 +3199,7 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
     };
     if (cfg.confirmBeforeCreate) {
       const name2 = this.REPORT_NAMES[type];
-      new class extends import_obsidian12.Modal {
+      new class extends import_obsidian14.Modal {
         onOpen() {
           this.contentEl.createEl("p", { text: `${name2}\u4E0D\u5B58\u5728\uFF0C\u662F\u5426\u65B0\u5EFA\uFF1F` });
           this.contentEl.createEl("p", { text: path, cls: "dashboard-field-hint" });
@@ -2324,7 +3210,7 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
             try {
               await doCreate();
             } catch (e) {
-              new import_obsidian12.Notice(`\u521B\u5EFA\u5931\u8D25: ${e.message}`);
+              new import_obsidian14.Notice(`\u521B\u5EFA\u5931\u8D25: ${e.message}`);
             }
           });
         }
@@ -2336,7 +3222,7 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
       try {
         await doCreate();
       } catch (e) {
-        new import_obsidian12.Notice(`\u521B\u5EFA${name}\u5931\u8D25: ${e.message}`);
+        new import_obsidian14.Notice(`\u521B\u5EFA${name}\u5931\u8D25: ${e.message}`);
       }
     }
   }
@@ -2357,11 +3243,13 @@ var HeatmapComponent = class _HeatmapComponent extends BaseComponent {
 };
 
 // src/ui/components/LLMCommandComponent.ts
-var import_obsidian13 = require("obsidian");
+var import_obsidian15 = require("obsidian");
 var LLMCommandComponent = class extends BaseComponent {
   constructor(app, settings, llmService, onTokenRefresh) {
     super(app, settings);
     this.executing = false;
+    this.abortController = null;
+    this.modEl = null;
     this.llmService = llmService;
     this.logService = new LogService(app);
     this.onTokenRefresh = onTokenRefresh;
@@ -2369,8 +3257,18 @@ var LLMCommandComponent = class extends BaseComponent {
   get id() {
     return "llm-command";
   }
+  /** If currently streaming, adopt existing DOM instead of rebuilding. */
   async render(container) {
+    if (this.executing && this.modEl && this.modEl.isConnected) {
+      container.appendChild(this.modEl);
+      return;
+    }
+    if (this.executing && this.modEl) {
+      container.appendChild(this.modEl);
+      return;
+    }
     const mod = container.createDiv("dashboard-module");
+    this.modEl = mod;
     const llmHeader = mod.createDiv("dashboard-module-header");
     const llmTitleWrap = llmHeader.createDiv("dashboard-module-title-wrap");
     llmTitleWrap.createEl("span", { text: "\u26A1", cls: "dashboard-module-icon" });
@@ -2399,62 +3297,151 @@ var LLMCommandComponent = class extends BaseComponent {
     const exportBtn = resultActions.createEl("button", { text: "\u5BFC\u51FA\u5230 outputs", cls: "dashboard-link-btn" });
     const errorEl = body.createDiv("dashboard-exec-error");
     errorEl.style.display = "none";
+    const resetButton = () => {
+      execBtn.disabled = false;
+      execBtn.textContent = "\u25B6 \u6267\u884C";
+      execBtn.classList.remove("mod-warning");
+      execBtn.classList.add("mod-cta");
+    };
     execBtn.addEventListener("click", async () => {
-      if (this.executing)
+      var _a;
+      if (this.executing) {
+        (_a = this.abortController) == null ? void 0 : _a.abort();
         return;
+      }
       const input = inputArea.value.trim();
       if (!input) {
-        new import_obsidian13.Notice("\u8BF7\u8F93\u5165\u5185\u5BB9");
+        new import_obsidian15.Notice("\u8BF7\u8F93\u5165\u5185\u5BB9");
         return;
       }
       if (!this.settings.apiKey) {
-        new import_obsidian13.Notice("\u8BF7\u5148\u914D\u7F6E API Key");
+        new import_obsidian15.Notice("\u8BF7\u5148\u914D\u7F6E API Key");
         return;
       }
       this.executing = true;
-      execBtn.disabled = true;
-      execBtn.textContent = "\u6267\u884C\u4E2D...";
+      this.abortController = new AbortController();
+      execBtn.classList.remove("mod-cta");
+      execBtn.classList.add("mod-warning");
+      execBtn.textContent = "\u23F9 \u4E2D\u6B62";
       errorEl.style.display = "none";
       resultEl.textContent = "";
       resultActions.style.display = "none";
       try {
+        const cmd = commandSelect.value;
         const result = await this.llmService.executeCommand(
-          commandSelect.value,
-          input
+          cmd,
+          input,
+          (chunk) => {
+            resultEl.textContent += chunk;
+          },
+          this.abortController.signal
         );
         resultEl.textContent = result;
         resultActions.style.display = "";
-        const logType = commandSelect.value === "lint-wiki" ? "lint" : commandSelect.value;
+        const logType = cmd === "lint-wiki" ? "lint" : cmd;
         this.logService.writeLog(logType, input.slice(0, 80));
         exportBtn.onclick = async () => {
-          const filename = `outputs/${commandSelect.value}-${Date.now()}.md`;
+          const filename = `outputs/${cmd}-${Date.now()}.md`;
           try {
+            if (!await this.app.vault.adapter.exists("outputs")) {
+              await this.app.vault.adapter.mkdir("outputs");
+            }
             await this.app.vault.create(filename, result);
-          } catch (e) {
-            await this.app.vault.adapter.mkdir("outputs");
-            await this.app.vault.create(filename, result);
+            new import_obsidian15.Notice(`\u5DF2\u5BFC\u51FA\u5230 ${filename}`);
+          } catch (err) {
+            new import_obsidian15.Notice(`\u5BFC\u51FA\u5931\u8D25: ${err.message}`);
           }
-          new import_obsidian13.Notice(`\u5DF2\u5BFC\u51FA\u5230 ${filename}`);
         };
       } catch (e) {
-        errorEl.textContent = `\u26A0 ${e.message}`;
+        if ((e == null ? void 0 : e.name) === "AbortError") {
+          errorEl.textContent = "\u5DF2\u4E2D\u6B62";
+        } else {
+          errorEl.textContent = `\u26A0 ${e.message}`;
+        }
         errorEl.style.display = "";
       } finally {
         this.executing = false;
-        execBtn.disabled = false;
-        execBtn.textContent = "\u25B6 \u6267\u884C";
+        this.abortController = null;
+        resetButton();
         this.onTokenRefresh();
       }
     });
   }
+  destroy() {
+    var _a;
+    (_a = this.abortController) == null ? void 0 : _a.abort();
+    this.abortController = null;
+    this.executing = false;
+    this.modEl = null;
+    super.destroy();
+  }
+};
+
+// src/ui/components/OperationLogComponent.ts
+var import_obsidian16 = require("obsidian");
+var LOG_TYPE_LABELS = {
+  ingest: "\u5165\u5E93",
+  query: "\u95EE\u7B54",
+  lint: "\u5BA1\u9605",
+  unknown: "\u5176\u4ED6"
+};
+var LOG_TYPE_CLS = {
+  ingest: "ingest",
+  query: "query",
+  lint: "lint",
+  unknown: "unknown"
+};
+var OperationLogComponent = class extends BaseComponent {
+  constructor(app, settings, logService) {
+    super(app, settings);
+    this.logService = logService;
+  }
+  get id() {
+    return "operation-log";
+  }
+  async render(container) {
+    const mod = container.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    const titleWrap = header.createDiv("dashboard-module-title-wrap");
+    titleWrap.createEl("span", { text: "\u{1F4CB}", cls: "dashboard-module-icon" });
+    titleWrap.createEl("span", { text: "\u64CD\u4F5C\u65E5\u5FD7", cls: "dashboard-module-title" });
+    const openFolderBtn = header.createEl("button", {
+      cls: "dashboard-icon-btn",
+      title: "\u6253\u5F00 wiki/log \u76EE\u5F55"
+    });
+    openFolderBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+    openFolderBtn.addEventListener("click", () => {
+      const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+      const logFile = this.app.vault.getAbstractFileByPath(`wiki/log/${today}.md`);
+      if (logFile instanceof import_obsidian16.TFile) {
+        this.app.workspace.getLeaf(false).openFile(logFile);
+      }
+    });
+    const body = mod.createDiv("dashboard-module-body");
+    const entries = await this.logService.getRecentLogs(8);
+    if (entries.length === 0) {
+      body.createDiv({ text: "\u6682\u65E0\u64CD\u4F5C\u8BB0\u5F55\uFF08\u6267\u884C LLM \u6307\u4EE4\u540E\u5C06\u81EA\u52A8\u5199\u5165 wiki/log\uFF09", cls: "dashboard-empty" });
+      return;
+    }
+    const list = body.createDiv("dashboard-log-list");
+    for (const entry of entries) {
+      const row = list.createDiv("dashboard-log-row");
+      row.createEl("span", {
+        text: LOG_TYPE_LABELS[entry.type],
+        cls: `dashboard-log-type dashboard-log-type-${LOG_TYPE_CLS[entry.type]}`
+      });
+      row.createEl("span", { text: entry.target, cls: "dashboard-log-target", title: entry.raw });
+      row.createEl("span", { text: entry.time, cls: "dashboard-log-time" });
+    }
+  }
 };
 
 // src/ui/components/GitSyncComponent.ts
-var import_obsidian15 = require("obsidian");
+var import_obsidian18 = require("obsidian");
 
 // src/modals/GitConfigModal.ts
-var import_obsidian14 = require("obsidian");
-var GitConfigModal = class extends import_obsidian14.Modal {
+var import_obsidian17 = require("obsidian");
+var GitConfigModal = class extends import_obsidian17.Modal {
   constructor(app, settings, onSave) {
     super(app);
     this.onSave = onSave;
@@ -2522,6 +3509,28 @@ var GitConfigModal = class extends import_obsidian14.Modal {
         "0 = \u6BCF\u6B21\u53D8\u66F4\u540E\u63A8\u9001"
       );
     }
+    this.createTextField(
+      contentEl,
+      "\u72B6\u6001\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF09",
+      String(this.settings.gitPollInterval),
+      (v) => {
+        const n = parseInt(v);
+        if (!isNaN(n) && n >= 0)
+          this.settings.gitPollInterval = n;
+      },
+      "30\uFF080 = \u5173\u95ED\u8F6E\u8BE2\uFF0C\u4EC5\u5728 vault \u53D8\u66F4\u65F6\u5237\u65B0\uFF09"
+    );
+    this.createTextField(
+      contentEl,
+      "Push/Pull \u8D85\u65F6\uFF08\u5206\u949F\uFF09",
+      String(this.settings.gitPushTimeout),
+      (v) => {
+        const n = parseInt(v);
+        if (!isNaN(n) && n >= 0)
+          this.settings.gitPushTimeout = n;
+      },
+      "5\uFF080 = \u4E0D\u9650\u65F6\uFF1B\u5927\u4ED3\u5E93\u9996\u6B21\u63A8\u9001\u53EF\u8BBE 10 \u6216\u66F4\u5927\uFF09"
+    );
     this.createTextFieldWithPreview(
       contentEl,
       "Commit \u6D88\u606F\u6A21\u677F",
@@ -2540,7 +3549,7 @@ var GitConfigModal = class extends import_obsidian14.Modal {
     saveBtn.addEventListener("click", async () => {
       await this.onSave(this.settings);
       this.close();
-      new import_obsidian14.Notice("Git \u914D\u7F6E\u5DF2\u4FDD\u5B58");
+      new import_obsidian17.Notice("Git \u914D\u7F6E\u5DF2\u4FDD\u5B58");
     });
   }
   createToggle(parent, label, value, onChange) {
@@ -2630,6 +3639,7 @@ var GitSyncComponent = class extends BaseComponent {
     this.pollTimer = null;
     this.autoPushTimer = null;
     this.autoPushDebounceTimer = null;
+    this.modEl = null;
     this.gitService = gitService;
     this.onSettingsChange = onSettingsChange;
     this.onAutoPushSetup = onAutoPushSetup;
@@ -2637,16 +3647,24 @@ var GitSyncComponent = class extends BaseComponent {
   get id() {
     return "git-sync";
   }
+  updateSettings(settings) {
+    const oldPoll = this.settings.gitPollInterval;
+    super.updateSettings(settings);
+    if (oldPoll !== settings.gitPollInterval && this.pollTimer !== null) {
+      this.startPolling();
+    }
+  }
   async render(container) {
     const mod = container.createDiv("dashboard-module");
     mod.id = "dashboard-git-module";
+    this.modEl = mod;
     this.buildHeader(mod);
     const body = mod.createDiv("dashboard-module-body");
     await this.buildBodyContent(body);
   }
   async update() {
-    const mod = document.getElementById("dashboard-git-module");
-    if (!mod)
+    const mod = this.modEl;
+    if (!mod || !mod.isConnected)
       return;
     const existingBody = mod.querySelector(".dashboard-module-body");
     if (existingBody)
@@ -2655,8 +3673,12 @@ var GitSyncComponent = class extends BaseComponent {
     await this.buildBodyContent(body);
   }
   startPolling() {
+    var _a;
     this.stopPolling();
-    this.pollTimer = setInterval(() => this.update(), 5e3);
+    const seconds = Math.max(0, (_a = this.settings.gitPollInterval) != null ? _a : 30);
+    if (seconds === 0)
+      return;
+    this.pollTimer = setInterval(() => this.update(), seconds * 1e3);
   }
   stopPolling() {
     if (this.pollTimer) {
@@ -2760,10 +3782,10 @@ var GitSyncComponent = class extends BaseComponent {
           if (this.settings.gitRemoteURL) {
             await this.gitService.ensureRemote(this.settings.gitRemoteURL, this.settings.gitRemoteName);
           }
-          new import_obsidian15.Notice("Git \u4ED3\u5E93\u521D\u59CB\u5316\u6210\u529F");
+          new import_obsidian18.Notice("Git \u4ED3\u5E93\u521D\u59CB\u5316\u6210\u529F");
           await this.update();
         } catch (e) {
-          new import_obsidian15.Notice(`\u521D\u59CB\u5316\u5931\u8D25: ${e.message}`);
+          new import_obsidian18.Notice(`\u521D\u59CB\u5316\u5931\u8D25: ${e.message}`);
           initBtn.disabled = false;
           initBtn.textContent = "\u521D\u59CB\u5316 Git \u4ED3\u5E93";
         }
@@ -2823,12 +3845,13 @@ var GitSyncComponent = class extends BaseComponent {
           this.settings.gitRemoteName,
           this.settings.gitBranchName,
           this.settings.gitUsername || void 0,
-          this.settings.gitPassword || void 0
+          this.settings.gitPassword || void 0,
+          this.settings.gitPushTimeout
         );
-        new import_obsidian15.Notice(result);
+        new import_obsidian18.Notice(result);
         await this.update();
       } catch (e) {
-        new import_obsidian15.Notice(`Pull \u5931\u8D25: ${e.message}`);
+        new import_obsidian18.Notice(`Pull \u5931\u8D25: ${e.message}`);
       } finally {
         pullBtn.disabled = false;
         pullBtn.textContent = "\u2B07 Pull";
@@ -2838,7 +3861,7 @@ var GitSyncComponent = class extends BaseComponent {
     pushBtn.addEventListener("click", async () => {
       const files = await this.gitService.getStatusFiles();
       if (files.length === 0) {
-        new import_obsidian15.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u6587\u4EF6");
+        new import_obsidian18.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u6587\u4EF6");
         return;
       }
       this.showPushConfirmModal(files);
@@ -2847,7 +3870,7 @@ var GitSyncComponent = class extends BaseComponent {
     rollbackBtn.addEventListener("click", async () => {
       const files = await this.gitService.getStatusFiles();
       if (files.length === 0) {
-        new import_obsidian15.Notice("\u6CA1\u6709\u53EF\u4EE5\u56DE\u6EDA\u7684\u53D8\u66F4");
+        new import_obsidian18.Notice("\u6CA1\u6709\u53EF\u4EE5\u56DE\u6EDA\u7684\u53D8\u66F4");
         return;
       }
       this.showRollbackConfirmModal(files);
@@ -2896,13 +3919,12 @@ var GitSyncComponent = class extends BaseComponent {
         this.settings.gitBranchName,
         msg,
         this.settings.gitUsername || void 0,
-        this.settings.gitPassword || void 0
+        this.settings.gitPassword || void 0,
+        this.settings.gitPushTimeout
       );
-      console.log("[yyDashboard] Auto push completed");
-      new import_obsidian15.Notice("\u81EA\u52A8\u63A8\u9001\u6210\u529F");
+      new import_obsidian18.Notice("\u81EA\u52A8\u63A8\u9001\u6210\u529F");
     } catch (e) {
-      console.log(`[yyDashboard] Auto push failed: ${e.message}`);
-      new import_obsidian15.Notice(`\u81EA\u52A8\u63A8\u9001\u5931\u8D25: ${e.message}`);
+      new import_obsidian18.Notice(`\u81EA\u52A8\u63A8\u9001\u5931\u8D25: ${e.message}`);
     }
   }
   buildCommitMessage() {
@@ -3008,7 +4030,7 @@ var GitSyncComponent = class extends BaseComponent {
           item.addEventListener("mousedown", async (e) => {
             e.preventDefault();
             const f = this.app.vault.getAbstractFileByPath(filePath);
-            if (f instanceof import_obsidian15.TFile)
+            if (f instanceof import_obsidian18.TFile)
               await this.app.workspace.getLeaf(false).openFile(f);
             remove();
           });
@@ -3037,7 +4059,7 @@ var GitSyncComponent = class extends BaseComponent {
       "MM": "\u6709\u51B2\u7A81",
       "R ": "\u5DF2\u91CD\u547D\u540D"
     };
-    new class extends import_obsidian15.Modal {
+    new class extends import_obsidian18.Modal {
       constructor() {
         super(...arguments);
         this.checkboxes = [];
@@ -3091,7 +4113,7 @@ var GitSyncComponent = class extends BaseComponent {
         commitOnlyBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) {
-            new import_obsidian15.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
+            new import_obsidian18.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
             return;
           }
           commitOnlyBtn.disabled = true;
@@ -3100,14 +4122,14 @@ var GitSyncComponent = class extends BaseComponent {
             const staged = await gitService.stageFiles(selected);
             const committed = await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
             if (committed) {
-              new import_obsidian15.Notice(staged.length === selected.length ? `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
+              new import_obsidian18.Notice(staged.length === selected.length ? `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
             } else {
-              new import_obsidian15.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u53D8\u66F4");
+              new import_obsidian18.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u53D8\u66F4");
             }
             this.close();
             await view.update();
           } catch (e) {
-            new import_obsidian15.Notice(`Commit \u5931\u8D25: ${e.message}`);
+            new import_obsidian18.Notice(`Commit \u5931\u8D25: ${e.message}`);
             commitOnlyBtn.disabled = false;
             commitOnlyBtn.textContent = "\u4EC5 Commit";
           }
@@ -3116,27 +4138,42 @@ var GitSyncComponent = class extends BaseComponent {
         pushBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) {
-            new import_obsidian15.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
+            new import_obsidian18.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
             return;
           }
           pushBtn.disabled = true;
           pushBtn.textContent = "\u63A8\u9001\u4E2D...";
+          let staged = [];
+          let committed = false;
           try {
-            const staged = await gitService.stageFiles(selected);
+            staged = await gitService.stageFiles(selected);
             await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
+            committed = true;
             await gitService.push(
               settings.gitRemoteName,
               settings.gitBranchName,
               settings.gitUsername || void 0,
-              settings.gitPassword || void 0
+              settings.gitPassword || void 0,
+              settings.gitPushTimeout
             );
-            new import_obsidian15.Notice(staged.length === selected.length ? `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
+            new import_obsidian18.Notice(staged.length === selected.length ? `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
             this.close();
             await view.update();
           } catch (e) {
-            new import_obsidian15.Notice(`Push \u5931\u8D25: ${e.message}`);
-            pushBtn.disabled = false;
-            pushBtn.textContent = "Commit & Push";
+            const isTimeout = (e == null ? void 0 : e.code) === "TIMEOUT";
+            if (committed && isTimeout) {
+              new import_obsidian18.Notice(`\u63A8\u9001\u8D85\u65F6\uFF0C\u4F46\u5DF2\u672C\u5730\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF1B\u8BF7\u7A0D\u540E\u5230\u8FDC\u7A0B\u4ED3\u5E93\u786E\u8BA4\u662F\u5426\u5DF2\u540C\u6B65`, 8e3);
+              this.close();
+              await view.update();
+            } else if (committed) {
+              new import_obsidian18.Notice(`\u672C\u5730\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF0C\u4F46\u63A8\u9001\u5931\u8D25: ${e.message}`, 8e3);
+              this.close();
+              await view.update();
+            } else {
+              new import_obsidian18.Notice(`Push \u5931\u8D25: ${e.message}`);
+              pushBtn.disabled = false;
+              pushBtn.textContent = "Commit & Push";
+            }
           }
         });
       }
@@ -3154,7 +4191,7 @@ var GitSyncComponent = class extends BaseComponent {
       "??": "\u65B0\u589E",
       " D": "\u5DF2\u5220\u9664"
     };
-    new class extends import_obsidian15.Modal {
+    new class extends import_obsidian18.Modal {
       constructor() {
         super(...arguments);
         this.checkboxes = [];
@@ -3201,18 +4238,18 @@ var GitSyncComponent = class extends BaseComponent {
         confirmBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) {
-            new import_obsidian15.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
+            new import_obsidian18.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
             return;
           }
           confirmBtn.disabled = true;
           confirmBtn.textContent = "\u56DE\u6EDA\u4E2D...";
           try {
             const restored = await gitService.restoreFiles(selected);
-            new import_obsidian15.Notice(`\u5DF2\u56DE\u6EDA ${restored.length} \u4E2A\u6587\u4EF6`);
+            new import_obsidian18.Notice(`\u5DF2\u56DE\u6EDA ${restored.length} \u4E2A\u6587\u4EF6`);
             this.close();
             await view.update();
           } catch (e) {
-            new import_obsidian15.Notice(`\u56DE\u6EDA\u5931\u8D25: ${e.message}`);
+            new import_obsidian18.Notice(`\u56DE\u6EDA\u5931\u8D25: ${e.message}`);
             confirmBtn.disabled = false;
             confirmBtn.textContent = "\u786E\u8BA4\u56DE\u6EDA";
           }
@@ -3226,7 +4263,7 @@ var GitSyncComponent = class extends BaseComponent {
 };
 
 // src/ui/components/RemotelySaveComponent.ts
-var import_obsidian16 = require("obsidian");
+var import_obsidian19 = require("obsidian");
 var RemotelySaveComponent = class extends BaseComponent {
   constructor(app, settings) {
     super(app, settings);
@@ -3237,14 +4274,16 @@ var RemotelySaveComponent = class extends BaseComponent {
     return "remotely-save";
   }
   isRemotelySaveEnabled() {
-    var _a, _b;
+    var _a, _b, _c;
     const plugins = this.app.plugins;
     if (!plugins)
       return false;
     const manifests = (_a = plugins.manifests) != null ? _a : {};
     if (!manifests["remotely-save"])
       return false;
-    const enabledSet = (_b = plugins.enabledPlugins) != null ? _b : {};
+    if ((_b = plugins.plugins) == null ? void 0 : _b["remotely-save"])
+      return true;
+    const enabledSet = (_c = plugins.enabledPlugins) != null ? _c : {};
     if (enabledSet instanceof Set)
       return enabledSet.has("remotely-save");
     return !!enabledSet["remotely-save"];
@@ -3257,7 +4296,7 @@ var RemotelySaveComponent = class extends BaseComponent {
     const header = mod.createDiv("dashboard-module-header");
     const rsTitleWrap = header.createDiv("dashboard-module-title-wrap");
     rsTitleWrap.createEl("span", { text: "\u2601\uFE0F", cls: "dashboard-module-icon" });
-    rsTitleWrap.createEl("span", { text: "OneDrive \u540C\u6B65", cls: "dashboard-module-title" });
+    rsTitleWrap.createEl("span", { text: "\u4E91\u540C\u6B65\u8BB0\u5F55", cls: "dashboard-module-title" });
     const body = mod.createDiv("dashboard-module-body dashboard-sync-body");
     const days = 7;
     const [sessions, totalCount] = await Promise.all([
@@ -3265,8 +4304,12 @@ var RemotelySaveComponent = class extends BaseComponent {
       this.remotelySaveService.getTotalSyncCount()
     ]);
     if (sessions.length === 0) {
-      body.createDiv({ text: "\u6682\u65E0 Remotely Save \u540C\u6B65\u8BB0\u5F55", cls: "dashboard-git-mobile-hint" });
+      body.createDiv({ text: "\u6682\u65E0\u540C\u6B65\u8BB0\u5F55\uFF08\u4F9D\u8D56 Remotely Save \u63D2\u4EF6\uFF09", cls: "dashboard-git-mobile-hint" });
       return;
+    }
+    const remoteLabel = formatRemoteType(sessions[0].remoteType);
+    if (remoteLabel && remoteLabel !== "\u672A\u77E5") {
+      header.createEl("span", { text: remoteLabel, cls: "dashboard-module-badge" });
     }
     header.createEl("span", { text: `\u5171 ${totalCount} \u6B21\u540C\u6B65`, cls: "dashboard-module-badge" });
     const sessionList = body.createDiv("dashboard-sync-session-list");
@@ -3314,9 +4357,9 @@ var RemotelySaveComponent = class extends BaseComponent {
       item.addEventListener("click", () => {
         const cleanPath = f.replace(/^\/+|\/+$/g, "");
         const abstract = this.app.vault.getAbstractFileByPath(cleanPath);
-        if (abstract instanceof import_obsidian16.TFile) {
+        if (abstract instanceof import_obsidian19.TFile) {
           this.app.workspace.getLeaf(false).openFile(abstract);
-        } else if (abstract instanceof import_obsidian16.TFolder) {
+        } else if (abstract instanceof import_obsidian19.TFolder) {
           this.fileService.toggleFolderInExplorer(cleanPath);
         } else {
           const lastSlash = cleanPath.lastIndexOf("/");
@@ -3329,7 +4372,7 @@ var RemotelySaveComponent = class extends BaseComponent {
 };
 
 // src/ui/components/TaskQuickAddComponent.ts
-var import_obsidian17 = require("obsidian");
+var import_obsidian20 = require("obsidian");
 var TASK_SECTIONS = [
   { key: "urgent", label: "\u{1F534} \u7D27\u6025", section: "### \u{1F534} \u7D27\u6025/\u91CD\u8981", placeholder: "\u7D27\u6025\u4EFB\u52A1..." },
   { key: "normal", label: "\u{1F7E1} \u4E00\u822C", section: "### \u{1F7E1} \u4E00\u822C", placeholder: "\u4E00\u822C\u4EFB\u52A1..." },
@@ -3371,7 +4414,7 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
           await this.appendBulletToReport(cfg.section, val);
           input.value = td[cfg.key] || "";
         } catch (e) {
-          new import_obsidian17.Notice(`\u6DFB\u52A0\u5931\u8D25: ${e.message}`);
+          new import_obsidian20.Notice(`\u6DFB\u52A0\u5931\u8D25: ${e.message}`);
         } finally {
           addBtn.disabled = false;
           addBtn.textContent = "+";
@@ -3404,7 +4447,7 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
         ongoingInput.value = td.ongoing || "";
         pctInput.value = td.ongoingPercent || "";
       } catch (e) {
-        new import_obsidian17.Notice(`\u6DFB\u52A0\u5931\u8D25: ${e.message}`);
+        new import_obsidian20.Notice(`\u6DFB\u52A0\u5931\u8D25: ${e.message}`);
       } finally {
         ongoingBtn.disabled = false;
         ongoingBtn.textContent = "+";
@@ -3424,7 +4467,7 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
     const td = this.settings.taskDefaults;
     const saveSettings = this.onSettingsChange;
     const currentSettings = this.settings;
-    new class extends import_obsidian17.Modal {
+    new class extends import_obsidian20.Modal {
       onOpen() {
         const { contentEl } = this;
         contentEl.addClass("dashboard-task-defaults-modal");
@@ -3471,7 +4514,7 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
     const path = dir ? `${dir}/${relPath}.md` : `${relPath}.md`;
     const file = this.app.vault.getAbstractFileByPath(path);
     let content = "";
-    if (file instanceof import_obsidian17.TFile) {
+    if (file instanceof import_obsidian20.TFile) {
       content = await this.app.vault.read(file);
     } else {
       content = _TaskQuickAddComponent.getDefaultReportTemplate();
@@ -3519,7 +4562,7 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
       lines.splice(insertAt, 0, bullet);
     }
     const newContent = lines.join("\n");
-    if (file instanceof import_obsidian17.TFile) {
+    if (file instanceof import_obsidian20.TFile) {
       await this.app.vault.modify(file, newContent);
     } else {
       await this.app.vault.create(path, newContent);
@@ -3579,7 +4622,7 @@ var TaskQuickAddComponent = class _TaskQuickAddComponent extends BaseComponent {
 };
 
 // src/ui/components/PluginManageComponent.ts
-var import_obsidian18 = require("obsidian");
+var import_obsidian21 = require("obsidian");
 var PluginManageComponent = class extends BaseComponent {
   constructor(app, settings) {
     super(app, settings);
@@ -3629,9 +4672,9 @@ var PluginManageComponent = class extends BaseComponent {
           cb.disabled = true;
           try {
             await this.pluginService.togglePlugin(p.id, cb.checked);
-            new import_obsidian18.Notice(`${p.name} \u5DF2${cb.checked ? "\u542F\u7528" : "\u7981\u7528"}`);
+            new import_obsidian21.Notice(`${p.name} \u5DF2${cb.checked ? "\u542F\u7528" : "\u7981\u7528"}`);
           } catch (e) {
-            new import_obsidian18.Notice(`\u64CD\u4F5C\u5931\u8D25: ${e.message}`);
+            new import_obsidian21.Notice(`\u64CD\u4F5C\u5931\u8D25: ${e.message}`);
             cb.checked = !cb.checked;
           } finally {
             cb.disabled = false;
@@ -3650,7 +4693,7 @@ var PluginManageComponent = class extends BaseComponent {
 
 // src/ui/DashboardView.ts
 var DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
-var DashboardView = class extends import_obsidian19.ItemView {
+var DashboardView = class extends import_obsidian22.ItemView {
   constructor(leaf, settings, onSettingsChange) {
     super(leaf);
     // Component map by ID (for moduleOrder lookup)
@@ -3668,12 +4711,12 @@ var DashboardView = class extends import_obsidian19.ItemView {
     this.onSettingsChange = onSettingsChange;
     this.fileService = new FileService(this.app);
     this.logService = new LogService(this.app);
-    this.llmService = new LLMService(settings, settings.tokenUsageDataPath);
+    this.llmService = new LLMService(this.app, settings, settings.tokenUsageDataPath);
     this.pluginService = new PluginManageService(this.app);
     this.heatmapService = new HeatmapService(this.app, settings.heatmapDataPath);
     this.gitService = new GitService(this.app);
     this.remotelySaveService = new RemotelySaveService();
-    this.llmService.setApp(this.app);
+    this.reportService = new ReportService(this.app, settings);
     this.headerComponent = new HeaderComponent(
       this.app,
       settings,
@@ -3685,6 +4728,7 @@ var DashboardView = class extends import_obsidian19.ItemView {
       () => this.render()
     );
     this.searchComponent = new SearchComponent(this.app, settings);
+    this.workspaceBarComponent = new WorkspaceBarComponent(this.app, settings, this.fileService, this.reportService);
     this.fileStatsComponent = new FileStatsComponent(
       this.app,
       settings,
@@ -3708,6 +4752,7 @@ var DashboardView = class extends import_obsidian19.ItemView {
       this.llmService,
       () => this.headerComponent.refreshTokenBar()
     );
+    this.operationLogComponent = new OperationLogComponent(this.app, settings, this.logService);
     this.gitSyncComponent = new GitSyncComponent(
       this.app,
       settings,
@@ -3731,9 +4776,11 @@ var DashboardView = class extends import_obsidian19.ItemView {
     this.components = {
       "header": this.headerComponent,
       "search": this.searchComponent,
+      "workspace-bar": this.workspaceBarComponent,
       "file-stats": this.fileStatsComponent,
       "heatmap": this.heatmapComponent,
       "llm-command": this.llmCommandComponent,
+      "operation-log": this.operationLogComponent,
       "git-sync": this.gitSyncComponent,
       "remotely-save": this.remotelySaveComponent,
       "task-quickadd": this.taskQuickAddComponent,
@@ -3752,6 +4799,7 @@ var DashboardView = class extends import_obsidian19.ItemView {
   updateSettings(settings) {
     this.settings = settings;
     this.llmService.updateSettings(settings);
+    this.reportService.updateSettings(settings);
     for (const comp of Object.values(this.components)) {
       comp.updateSettings(settings);
     }
@@ -3797,13 +4845,8 @@ var DashboardView = class extends import_obsidian19.ItemView {
     this.onVaultChange = () => {
       if (this.autoRefreshTimer)
         clearTimeout(this.autoRefreshTimer);
-      this.autoRefreshTimer = setTimeout(async () => {
-        const statsContainer = document.getElementById("dashboard-file-stats-container");
-        if (statsContainer)
-          await this.fileStatsComponent.renderFileStats(statsContainer);
-        const recentContainer = document.getElementById("dashboard-recent-container");
-        if (recentContainer)
-          this.fileStatsComponent.renderRecentFiles(recentContainer);
+      this.autoRefreshTimer = setTimeout(() => {
+        this.fileStatsComponent.refreshExternal();
       }, 800);
       if (this.settings.gitEnabled) {
         if (this.gitRefreshTimer)
@@ -3860,7 +4903,10 @@ var DashboardView = class extends import_obsidian19.ItemView {
       clearTimeout(this.gitRefreshTimer);
     if (this.visibilityTimer)
       clearInterval(this.visibilityTimer);
-    this.gitSyncComponent.destroy();
+    document.body.querySelectorAll(".dashboard-heatmap-tip, .dashboard-popover").forEach((el) => el.remove());
+    for (const comp of Object.values(this.components)) {
+      comp.destroy();
+    }
   }
   async render() {
     var _a;
@@ -3881,23 +4927,41 @@ var DashboardView = class extends import_obsidian19.ItemView {
       offscreen.addClass("dashboard-root");
       await this.headerComponent.render(offscreen);
       await this.searchComponent.render(offscreen);
+      await this.workspaceBarComponent.render(offscreen);
       const scroll = offscreen.createDiv("dashboard-scroll");
       const order = this.settings.moduleOrder || [];
+      const visibility = this.settings.moduleVisibility || {};
+      const visibleOrder = [];
       for (const moduleId of order) {
+        if (visibility[moduleId] === false)
+          continue;
         const comp = this.components[moduleId];
-        if (comp) {
-          await comp.render(scroll);
-        }
+        if (!comp)
+          continue;
+        visibleOrder.push(moduleId);
+        await comp.render(scroll);
       }
       const moduleEls = scroll.querySelectorAll(".dashboard-module");
       moduleEls.forEach((modEl, index) => {
-        const moduleId = order[index];
+        const moduleId = visibleOrder[index];
         if (!moduleId)
           return;
         modEl.setAttribute("data-module-id", moduleId);
         const header = modEl.querySelector(".dashboard-module-header");
         if (!header)
           return;
+        if (isModuleCollapsed(moduleId)) {
+          modEl.classList.add("dashboard-module-collapsed");
+        }
+        const toggle = document.createElement("span");
+        toggle.className = "dashboard-module-collapse-toggle";
+        toggle.innerHTML = "\u25BE";
+        toggle.setAttribute("title", "\u6298\u53E0/\u5C55\u5F00");
+        toggle.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const collapsed = modEl.classList.toggle("dashboard-module-collapsed");
+          setModuleCollapsed(moduleId, collapsed);
+        });
         const handle = document.createElement("span");
         handle.className = "dashboard-module-drag-handle";
         handle.innerHTML = "\u22EE\u22EE";
@@ -3912,6 +4976,7 @@ var DashboardView = class extends import_obsidian19.ItemView {
           modEl.classList.remove("dragging");
           scroll.querySelectorAll(".dashboard-module").forEach((el) => el.classList.remove("drag-over"));
         });
+        header.prepend(toggle);
         header.prepend(handle);
         modEl.addEventListener("dragover", (e) => {
           e.preventDefault();
@@ -3957,7 +5022,7 @@ var DashboardView = class extends import_obsidian19.ItemView {
 };
 
 // src/main.ts
-var LLMWikiDashboardPlugin = class extends import_obsidian20.Plugin {
+var LLMWikiDashboardPlugin = class extends import_obsidian23.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(
@@ -3973,6 +5038,9 @@ var LLMWikiDashboardPlugin = class extends import_obsidian20.Plugin {
       callback: () => this.activateView()
     });
     this.addSettingTab(new DashboardSettingTab(this.app, this));
+    if (this.settings.openOnStartup) {
+      this.app.workspace.onLayoutReady(() => this.activateView());
+    }
   }
   async onunload() {
     this.app.workspace.detachLeavesOfType(DASHBOARD_VIEW_TYPE);
@@ -3989,6 +5057,7 @@ var LLMWikiDashboardPlugin = class extends import_obsidian20.Plugin {
     workspace.revealLeaf(leaf);
   }
   async loadSettings() {
+    var _a;
     const saved = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     if (saved == null ? void 0 : saved.reportConfigs) {
@@ -4002,6 +5071,17 @@ var LLMWikiDashboardPlugin = class extends import_obsidian20.Plugin {
     if (saved == null ? void 0 : saved.taskDefaults) {
       this.settings.taskDefaults = Object.assign({}, DEFAULT_SETTINGS.taskDefaults, saved.taskDefaults);
     }
+    const known = new Set(MODULE_IDS);
+    this.settings.moduleOrder = this.settings.moduleOrder.filter((id) => known.has(id));
+    const orderSet = new Set(this.settings.moduleOrder);
+    for (const mid of MODULE_IDS) {
+      if (!orderSet.has(mid))
+        this.settings.moduleOrder.push(mid);
+    }
+    this.settings.moduleVisibility = Object.assign(
+      defaultModuleVisibility(),
+      (_a = this.settings.moduleVisibility) != null ? _a : {}
+    );
   }
   async saveSettings(settings) {
     if (settings)
@@ -4015,7 +5095,7 @@ var LLMWikiDashboardPlugin = class extends import_obsidian20.Plugin {
     });
   }
 };
-var DashboardSettingTab = class extends import_obsidian20.PluginSettingTab {
+var DashboardSettingTab = class extends import_obsidian23.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -4024,48 +5104,73 @@ var DashboardSettingTab = class extends import_obsidian20.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Dashboard \u8BBE\u7F6E" });
-    const setting1 = new import_obsidian20.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
+    const setting1 = new import_obsidian23.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
       (text) => text.setPlaceholder("Dashboard").setValue(this.plugin.settings.dashboardTitle).onChange(async (value) => {
         this.plugin.settings.dashboardTitle = value.trim() || "Dashboard";
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting1, "Dashboard");
-    const setting2 = new import_obsidian20.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
+    const setting2 = new import_obsidian23.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
       (text) => text.setPlaceholder("\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F").setValue(this.plugin.settings.dashboardDesc).onChange(async (value) => {
         this.plugin.settings.dashboardDesc = value.trim();
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting2, "\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F");
-    const setting3 = new import_obsidian20.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
+    new import_obsidian23.Setting(containerEl).setName("\u542F\u52A8\u65F6\u81EA\u52A8\u6253\u5F00 Dashboard").setDesc("Obsidian \u542F\u52A8\u3001\u5E03\u5C40\u5C31\u7EEA\u540E\u81EA\u52A8\u6253\u5F00 Dashboard \u9762\u677F").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.openOnStartup).onChange(async (value) => {
+        this.plugin.settings.openOnStartup = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    containerEl.createEl("h3", { text: "\u6A21\u5757\u663E\u793A" });
+    containerEl.createEl("p", {
+      text: "\u5173\u95ED\u540E\u8BE5\u6A21\u5757\u4E0D\u5728 Dashboard \u4E2D\u663E\u793A\uFF1B\u53EF\u5728 Dashboard \u4E2D\u62D6\u62FD\u6392\u5E8F\u3001\u70B9\u51FB\u6807\u9898\u6298\u53E0\u3002",
+      cls: "dashboard-field-hint"
+    });
+    for (const mid of MODULE_IDS) {
+      new import_obsidian23.Setting(containerEl).setName(MODULE_LABELS[mid]).addToggle(
+        (toggle) => {
+          var _a;
+          return toggle.setValue(((_a = this.plugin.settings.moduleVisibility) == null ? void 0 : _a[mid]) !== false).onChange(async (value) => {
+            if (!this.plugin.settings.moduleVisibility) {
+              this.plugin.settings.moduleVisibility = {};
+            }
+            this.plugin.settings.moduleVisibility[mid] = value;
+            await this.plugin.saveSettings();
+          });
+        }
+      );
+    }
+    const setting3 = new import_obsidian23.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
       (text) => text.setPlaceholder("https://api.openai.com/v1").setValue(this.plugin.settings.apiBaseUrl).onChange(async (value) => {
         this.plugin.settings.apiBaseUrl = value;
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting3, "https://api.openai.com/v1");
-    new import_obsidian20.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5").addText((text) => {
+    new import_obsidian23.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 .obsidian/plugins/yy-obsidian-dashboard/data.json\uFF0C\u82E5\u542F\u7528 Git \u540C\u6B65\u8BF7\u786E\u8BA4\u5DF2\u5FFD\u7565\u8BE5\u6587\u4EF6").addText((text) => {
       text.setPlaceholder("sk-...").setValue(this.plugin.settings.apiKey).onChange(async (value) => {
         this.plugin.settings.apiKey = value;
         await this.plugin.saveSettings();
       });
       text.inputEl.type = "password";
     });
-    const setting4 = new import_obsidian20.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
+    const setting4 = new import_obsidian23.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
       (text) => text.setPlaceholder("gpt-4o").setValue(this.plugin.settings.modelName).onChange(async (value) => {
         this.plugin.settings.modelName = value;
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting4, "gpt-4o");
-    new import_obsidian20.Setting(containerEl).setName("Temperature").addSlider(
+    new import_obsidian23.Setting(containerEl).setName("Temperature").addSlider(
       (slider) => slider.setLimits(0, 2, 0.1).setValue(this.plugin.settings.temperature).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.temperature = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian20.Setting(containerEl).setName("Max Tokens").addText(
+    new import_obsidian23.Setting(containerEl).setName("Max Tokens").addText(
       (text) => text.setValue(String(this.plugin.settings.maxTokens)).onChange(async (value) => {
         const n = parseInt(value);
         if (!isNaN(n)) {
@@ -4074,20 +5179,20 @@ var DashboardSettingTab = class extends import_obsidian20.PluginSettingTab {
         }
       })
     );
-    new import_obsidian20.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
+    new import_obsidian23.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
       (text) => text.setPlaceholder("https://...").setValue(this.plugin.settings.tokenUsageApiUrl).onChange(async (value) => {
         this.plugin.settings.tokenUsageApiUrl = value;
         await this.plugin.saveSettings();
       })
     );
-    const setting5 = new import_obsidian20.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
+    const setting5 = new import_obsidian23.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
       (text) => text.setPlaceholder("https://...").setValue(this.plugin.settings.tokenBalanceApiUrl).onChange(async (value) => {
         this.plugin.settings.tokenBalanceApiUrl = value;
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting5, "https://api.deepseek.com/user/balance");
-    new import_obsidian20.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
+    new import_obsidian23.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
       (text) => text.setValue(this.plugin.settings.trackedFolders.join(", ")).onChange(async (value) => {
         this.plugin.settings.trackedFolders = value.split(",").map((s) => s.trim()).filter(Boolean);
         await this.plugin.saveSettings();
@@ -4104,31 +5209,31 @@ var DashboardSettingTab = class extends import_obsidian20.PluginSettingTab {
     for (const type of Object.keys(reportLabels)) {
       const cfg = this.plugin.settings.reportConfigs[type];
       containerEl.createEl("h4", { text: reportLabels[type] });
-      new import_obsidian20.Setting(containerEl).setName("\u542F\u7528").addToggle(
+      new import_obsidian23.Setting(containerEl).setName("\u542F\u7528").addToggle(
         (toggle) => toggle.setValue(cfg.enabled).onChange(async (value) => {
           cfg.enabled = value;
           await this.plugin.saveSettings();
         })
       );
-      new import_obsidian20.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
+      new import_obsidian23.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
         (toggle) => toggle.setValue(cfg.confirmBeforeCreate).onChange(async (value) => {
           cfg.confirmBeforeCreate = value;
           await this.plugin.saveSettings();
         })
       );
-      new import_obsidian20.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
+      new import_obsidian23.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
         (text) => text.setValue(cfg.directory).onChange(async (value) => {
           cfg.directory = value.trim();
           await this.plugin.saveSettings();
         })
       );
-      new import_obsidian20.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc(`\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD`).addText(
+      new import_obsidian23.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc(`\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD`).addText(
         (text) => text.setValue(cfg.filenameFormat).onChange(async (value) => {
           cfg.filenameFormat = value.trim();
           await this.plugin.saveSettings();
         })
       );
-      new import_obsidian20.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
+      new import_obsidian23.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
         (text) => text.setValue(cfg.templatePath).onChange(async (value) => {
           cfg.templatePath = value.trim();
           await this.plugin.saveSettings();
@@ -4136,54 +5241,54 @@ var DashboardSettingTab = class extends import_obsidian20.PluginSettingTab {
       );
     }
     containerEl.createEl("h3", { text: "Git \u540C\u6B65 (GitHub)" });
-    new import_obsidian20.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
+    new import_obsidian23.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.gitEnabled).onChange(async (value) => {
         this.plugin.settings.gitEnabled = value;
         await this.plugin.saveSettings();
       })
     );
-    const setting6 = new import_obsidian20.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
+    const setting6 = new import_obsidian23.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
       (text) => text.setPlaceholder("https://github.com/username/repo.git").setValue(this.plugin.settings.gitRemoteURL).onChange(async (value) => {
         this.plugin.settings.gitRemoteURL = value.trim();
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting6, "https://github.com/username/repo.git");
-    const setting7 = new import_obsidian20.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
+    const setting7 = new import_obsidian23.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
       (text) => text.setPlaceholder("origin").setValue(this.plugin.settings.gitRemoteName).onChange(async (value) => {
         this.plugin.settings.gitRemoteName = value.trim() || "origin";
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting7, "origin");
-    const setting8 = new import_obsidian20.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
+    const setting8 = new import_obsidian23.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
       (text) => text.setPlaceholder("main").setValue(this.plugin.settings.gitBranchName).onChange(async (value) => {
         this.plugin.settings.gitBranchName = value.trim() || "main";
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting8, "main");
-    const setting9 = new import_obsidian20.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
+    const setting9 = new import_obsidian23.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
       (text) => text.setPlaceholder("your-username").setValue(this.plugin.settings.gitUsername).onChange(async (value) => {
         this.plugin.settings.gitUsername = value.trim();
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(setting9, "your-username");
-    new import_obsidian20.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\uFF0C\u5B58\u50A8\u4E8E\u672C\u5730 data.json \u4E2D").addText((text) => {
+    new import_obsidian23.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 .obsidian/plugins/yy-obsidian-dashboard/data.json\uFF0C\u8BF7\u52A1\u5FC5\u5C06\u8BE5\u6587\u4EF6\u52A0\u5165 .gitignore\uFF0C\u907F\u514D\u540C\u6B65\u5230\u8FDC\u7A0B\u4ED3\u5E93").addText((text) => {
       text.setPlaceholder("your-token").setValue(this.plugin.settings.gitPassword).onChange(async (value) => {
         this.plugin.settings.gitPassword = value.trim();
         await this.plugin.saveSettings();
       });
       text.inputEl.type = "password";
     });
-    new import_obsidian20.Setting(containerEl).setName("\u81EA\u52A8 Push").setDesc("\u5F00\u542F\u540E\u6309\u8BBE\u5B9A\u7684\u65F6\u95F4\u95F4\u9694\u81EA\u52A8 push").addToggle(
+    new import_obsidian23.Setting(containerEl).setName("\u81EA\u52A8 Push").setDesc("\u5F00\u542F\u540E\u6309\u8BBE\u5B9A\u7684\u65F6\u95F4\u95F4\u9694\u81EA\u52A8 push").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.gitAutoPushEnabled).onChange(async (value) => {
         this.plugin.settings.gitAutoPushEnabled = value;
         await this.plugin.saveSettings();
       })
     );
-    const setting10 = new import_obsidian20.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
+    const setting10 = new import_obsidian23.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
       (text) => text.setPlaceholder("30").setValue(String(this.plugin.settings.gitAutoPushInterval)).onChange(async (value) => {
         const n = parseInt(value);
         if (!isNaN(n) && n >= 0) {
@@ -4193,7 +5298,27 @@ var DashboardSettingTab = class extends import_obsidian20.PluginSettingTab {
       })
     );
     this.addExampleHint(setting10, "30");
-    const setting11 = new import_obsidian20.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
+    const settingPoll = new import_obsidian23.Setting(containerEl).setName("Git \u72B6\u6001\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("Dashboard \u4E2D Git \u6A21\u5757\u81EA\u52A8\u5237\u65B0 status \u7684\u95F4\u9694\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u8F6E\u8BE2\uFF08\u4ECD\u4F1A\u5728 vault \u53D8\u66F4\u65F6\u5237\u65B0\uFF09").addText(
+      (text) => text.setPlaceholder("30").setValue(String(this.plugin.settings.gitPollInterval)).onChange(async (value) => {
+        const n = parseInt(value);
+        if (!isNaN(n) && n >= 0) {
+          this.plugin.settings.gitPollInterval = n;
+          await this.plugin.saveSettings();
+        }
+      })
+    );
+    this.addExampleHint(settingPoll, "30");
+    const settingTimeout = new import_obsidian23.Setting(containerEl).setName("Push/Pull \u8D85\u65F6\uFF08\u5206\u949F\uFF09").setDesc("\u7F51\u7EDC\u4F20\u8F93\u8D85\u65F6\u65F6\u95F4\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u9650\u65F6\uFF1B\u5927\u4ED3\u5E93\u9996\u6B21\u63A8\u9001\u5EFA\u8BAE\u8BBE 10 \u6216\u66F4\u5927").addText(
+      (text) => text.setPlaceholder("5").setValue(String(this.plugin.settings.gitPushTimeout)).onChange(async (value) => {
+        const n = parseInt(value);
+        if (!isNaN(n) && n >= 0) {
+          this.plugin.settings.gitPushTimeout = n;
+          await this.plugin.saveSettings();
+        }
+      })
+    );
+    this.addExampleHint(settingTimeout, "5");
+    const setting11 = new import_obsidian23.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
       (text) => text.setPlaceholder("auto: {{date}} {{time}}").setValue(this.plugin.settings.gitCommitTemplate).onChange(async (value) => {
         this.plugin.settings.gitCommitTemplate = value.trim();
         await this.plugin.saveSettings();

@@ -15,9 +15,11 @@ type MatchType = "filename" | "title" | "alias" | "tag" | "fuzzy";
 
 export class SearchComponent extends BaseComponent {
   private index: SearchIndexEntry[] = [];
+  private indexDirty = true;
   private searchInput: HTMLInputElement | null = null;
   private resultDropdown: HTMLElement | null = null;
   private blurTimer: ReturnType<typeof setTimeout> | null = null;
+  private vaultHandler: (() => void) | null = null;
 
   get id(): string { return "search"; }
 
@@ -31,11 +33,12 @@ export class SearchComponent extends BaseComponent {
     this.resultDropdown = searchWrap.createDiv("dashboard-search-dropdown");
     this.resultDropdown.style.display = "none";
 
-    this.buildIndex();
+    this.ensureVaultListeners();
+    this.ensureIndex();
 
     this.searchInput.addEventListener("input", () => this.doSearch());
     this.searchInput.addEventListener("focus", () => {
-      this.buildIndex();
+      this.ensureIndex();
       this.doSearch();
     });
     this.searchInput.addEventListener("blur", () => {
@@ -55,7 +58,34 @@ export class SearchComponent extends BaseComponent {
   }
 
   async update(_data?: any): Promise<void> {
+    this.indexDirty = true;
+  }
+
+  destroy(): void {
+    if (this.vaultHandler) {
+      this.app.vault.off("create", this.vaultHandler);
+      this.app.vault.off("delete", this.vaultHandler);
+      this.app.vault.off("rename", this.vaultHandler);
+      this.app.metadataCache.off("changed", this.vaultHandler);
+      this.vaultHandler = null;
+    }
+    if (this.blurTimer) { clearTimeout(this.blurTimer); this.blurTimer = null; }
+    super.destroy();
+  }
+
+  private ensureVaultListeners() {
+    if (this.vaultHandler) return;
+    this.vaultHandler = () => { this.indexDirty = true; };
+    this.app.vault.on("create", this.vaultHandler);
+    this.app.vault.on("delete", this.vaultHandler);
+    this.app.vault.on("rename", this.vaultHandler);
+    this.app.metadataCache.on("changed", this.vaultHandler);
+  }
+
+  private ensureIndex() {
+    if (!this.indexDirty) return;
     this.buildIndex();
+    this.indexDirty = false;
   }
 
   private buildIndex() {

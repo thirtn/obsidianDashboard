@@ -9,6 +9,8 @@ export class LLMCommandComponent extends BaseComponent {
   private logService: LogService;
   private onTokenRefresh: () => void;
   private executing = false;
+  private abortController: AbortController | null = null;
+  private modEl: HTMLElement | null = null;
 
   constructor(
     app: App,
@@ -24,8 +26,19 @@ export class LLMCommandComponent extends BaseComponent {
 
   get id(): string { return "llm-command"; }
 
+  /** If currently streaming, adopt existing DOM instead of rebuilding. */
   async render(container: HTMLElement): Promise<void> {
+    if (this.executing && this.modEl && this.modEl.isConnected) {
+      container.appendChild(this.modEl);
+      return;
+    }
+    if (this.executing && this.modEl) {
+      container.appendChild(this.modEl);
+      return;
+    }
+
     const mod = container.createDiv("dashboard-module");
+    this.modEl = mod;
     const llmHeader = mod.createDiv("dashboard-module-header");
     const llmTitleWrap = llmHeader.createDiv("dashboard-module-title-wrap");
     llmTitleWrap.createEl("span", { text: "⚡", cls: "dashboard-module-icon" });
@@ -61,50 +74,78 @@ export class LLMCommandComponent extends BaseComponent {
     const errorEl = body.createDiv("dashboard-exec-error");
     errorEl.style.display = "none";
 
+    const resetButton = () => {
+      execBtn.disabled = false;
+      execBtn.textContent = "▶ 执行";
+      execBtn.classList.remove("mod-warning");
+      execBtn.classList.add("mod-cta");
+    };
+
     execBtn.addEventListener("click", async () => {
-      if (this.executing) return;
+      if (this.executing) {
+        this.abortController?.abort();
+        return;
+      }
       const input = inputArea.value.trim();
       if (!input) { new Notice("请输入内容"); return; }
       if (!this.settings.apiKey) { new Notice("请先配置 API Key"); return; }
 
       this.executing = true;
-      execBtn.disabled = true;
-      execBtn.textContent = "执行中...";
+      this.abortController = new AbortController();
+      execBtn.classList.remove("mod-cta");
+      execBtn.classList.add("mod-warning");
+      execBtn.textContent = "⏹ 中止";
       errorEl.style.display = "none";
       resultEl.textContent = "";
       resultActions.style.display = "none";
 
       try {
+        const cmd = commandSelect.value as "ingest" | "query" | "lint-wiki";
         const result = await this.llmService.executeCommand(
-          commandSelect.value as "ingest" | "query" | "lint-wiki",
-          input
+          cmd,
+          input,
+          (chunk) => { resultEl.textContent += chunk; },
+          this.abortController.signal
         );
         resultEl.textContent = result;
         resultActions.style.display = "";
 
-        const logType = commandSelect.value === "lint-wiki" ? "lint"
-          : commandSelect.value as "ingest" | "query";
+        const logType = cmd === "lint-wiki" ? "lint" : cmd;
         this.logService.writeLog(logType, input.slice(0, 80));
 
         exportBtn.onclick = async () => {
-          const filename = `outputs/${commandSelect.value}-${Date.now()}.md`;
+          const filename = `outputs/${cmd}-${Date.now()}.md`;
           try {
+            if (!(await this.app.vault.adapter.exists("outputs"))) {
+              await this.app.vault.adapter.mkdir("outputs");
+            }
             await this.app.vault.create(filename, result);
-          } catch {
-            await this.app.vault.adapter.mkdir("outputs");
-            await this.app.vault.create(filename, result);
+            new Notice(`已导出到 ${filename}`);
+          } catch (err: any) {
+            new Notice(`导出失败: ${err.message}`);
           }
-          new Notice(`已导出到 ${filename}`);
         };
       } catch (e: any) {
-        errorEl.textContent = `⚠ ${e.message}`;
+        if (e?.name === "AbortError") {
+          errorEl.textContent = "已中止";
+        } else {
+          errorEl.textContent = `⚠ ${e.message}`;
+        }
         errorEl.style.display = "";
       } finally {
         this.executing = false;
-        execBtn.disabled = false;
-        execBtn.textContent = "▶ 执行";
+        this.abortController = null;
+        resetButton();
         this.onTokenRefresh();
       }
     });
+  }
+
+  destroy(): void {
+    this.abortController?.abort();
+    this.abortController = null;
+    this.executing = false;
+    this.modEl = null;
+    super.destroy();
   }
 }

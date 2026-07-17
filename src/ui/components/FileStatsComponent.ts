@@ -8,6 +8,8 @@ import { formatRelativeTime, attachFileListPopover } from "./utils";
 export class FileStatsComponent extends BaseComponent {
   private fileService: FileService;
   private onSettingsChange: (s: DashboardSettings) => Promise<void>;
+  private statsContainer: HTMLElement | null = null;
+  private recentContainer: HTMLElement | null = null;
 
   constructor(app: App, settings: DashboardSettings, onSettingsChange: (s: DashboardSettings) => Promise<void>) {
     super(app, settings);
@@ -33,10 +35,19 @@ export class FileStatsComponent extends BaseComponent {
     });
 
     const body = mod.createDiv("dashboard-module-body");
-    const statsContainer = body.createDiv({ attr: { id: "dashboard-file-stats-container" } });
-    await this.renderFileStats(statsContainer);
-    const recentContainer = body.createDiv({ cls: "dashboard-recent-section", attr: { id: "dashboard-recent-container" } });
-    this.renderRecentFiles(recentContainer);
+    this.statsContainer = body.createDiv();
+    await this.renderFileStats(this.statsContainer);
+    this.recentContainer = body.createDiv({ cls: "dashboard-recent-section" });
+    this.renderRecentFiles(this.recentContainer);
+  }
+
+  async refreshExternal(): Promise<void> {
+    if (this.statsContainer && this.statsContainer.isConnected) {
+      await this.renderFileStats(this.statsContainer);
+    }
+    if (this.recentContainer && this.recentContainer.isConnected) {
+      this.renderRecentFiles(this.recentContainer);
+    }
   }
 
   async renderFileStats(container: HTMLElement) {

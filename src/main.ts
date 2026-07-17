@@ -1,5 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { DashboardSettings, DEFAULT_SETTINGS, ReportType } from "./types";
+import { DashboardSettings, DEFAULT_SETTINGS, ReportType, MODULE_IDS, MODULE_LABELS, defaultModuleVisibility } from "./types";
 import { DashboardView, DASHBOARD_VIEW_TYPE } from "./ui/DashboardView";
 
 export default class LLMWikiDashboardPlugin extends Plugin {
@@ -23,6 +23,11 @@ export default class LLMWikiDashboardPlugin extends Plugin {
     });
 
     this.addSettingTab(new DashboardSettingTab(this.app, this));
+
+    // Open dashboard on startup if enabled
+    if (this.settings.openOnStartup) {
+      this.app.workspace.onLayoutReady(() => this.activateView());
+    }
   }
 
   async onunload() {
@@ -59,6 +64,18 @@ export default class LLMWikiDashboardPlugin extends Plugin {
     if (saved?.taskDefaults) {
       this.settings.taskDefaults = Object.assign({}, DEFAULT_SETTINGS.taskDefaults, saved.taskDefaults);
     }
+    // Migrate moduleOrder: drop unknown ids, append any new modules
+    const known = new Set<string>(MODULE_IDS);
+    this.settings.moduleOrder = this.settings.moduleOrder.filter((id) => known.has(id));
+    const orderSet = new Set(this.settings.moduleOrder);
+    for (const mid of MODULE_IDS) {
+      if (!orderSet.has(mid)) this.settings.moduleOrder.push(mid);
+    }
+    // Merge moduleVisibility with defaults
+    this.settings.moduleVisibility = Object.assign(
+      defaultModuleVisibility(),
+      this.settings.moduleVisibility ?? {}
+    );
   }
 
   async saveSettings(settings?: DashboardSettings) {
@@ -116,6 +133,39 @@ class DashboardSettingTab extends PluginSettingTab {
       );
     this.addExampleHint(setting2, "禹思天下有溺者，由己溺之也");
 
+    new Setting(containerEl)
+      .setName("启动时自动打开 Dashboard")
+      .setDesc("Obsidian 启动、布局就绪后自动打开 Dashboard 面板")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.openOnStartup)
+          .onChange(async (value) => {
+            this.plugin.settings.openOnStartup = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    containerEl.createEl("h3", { text: "模块显示" });
+    containerEl.createEl("p", {
+      text: "关闭后该模块不在 Dashboard 中显示；可在 Dashboard 中拖拽排序、点击标题折叠。",
+      cls: "dashboard-field-hint",
+    });
+    for (const mid of MODULE_IDS) {
+      new Setting(containerEl)
+        .setName(MODULE_LABELS[mid])
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.moduleVisibility?.[mid] !== false)
+            .onChange(async (value) => {
+              if (!this.plugin.settings.moduleVisibility) {
+                this.plugin.settings.moduleVisibility = {};
+              }
+              this.plugin.settings.moduleVisibility[mid] = value;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
+
     const setting3 = new Setting(containerEl)
       .setName("API Base URL")
       .setDesc("OpenAI Compatible 接口地址")
@@ -132,7 +182,7 @@ class DashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("API Key")
-      .setDesc("你的 API 密钥")
+      .setDesc("你的 API 密钥。⚠ 明文保存在 .obsidian/plugins/yy-obsidian-dashboard/data.json，若启用 Git 同步请确认已忽略该文件")
       .addText((text) => {
         text
           .setPlaceholder("sk-...")
@@ -376,7 +426,7 @@ class DashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("GitHub Token")
-      .setDesc("GitHub 私人令牌（https://github.com/settings/tokens），存储于本地 data.json 中")
+      .setDesc("GitHub 私人令牌（https://github.com/settings/tokens）。⚠ 明文保存在 .obsidian/plugins/yy-obsidian-dashboard/data.json，请务必将该文件加入 .gitignore，避免同步到远程仓库")
       .addText((text) => {
         text
           .setPlaceholder("your-token")
@@ -416,6 +466,40 @@ class DashboardSettingTab extends PluginSettingTab {
           })
       );
     this.addExampleHint(setting10, "30");
+
+    const settingPoll = new Setting(containerEl)
+      .setName("Git 状态刷新间隔（秒）")
+      .setDesc("Dashboard 中 Git 模块自动刷新 status 的间隔。设为 0 表示不轮询（仍会在 vault 变更时刷新）")
+      .addText((text) =>
+        text
+          .setPlaceholder("30")
+          .setValue(String(this.plugin.settings.gitPollInterval))
+          .onChange(async (value) => {
+            const n = parseInt(value);
+            if (!isNaN(n) && n >= 0) {
+              this.plugin.settings.gitPollInterval = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+    this.addExampleHint(settingPoll, "30");
+
+    const settingTimeout = new Setting(containerEl)
+      .setName("Push/Pull 超时（分钟）")
+      .setDesc("网络传输超时时间。设为 0 表示不限时；大仓库首次推送建议设 10 或更大")
+      .addText((text) =>
+        text
+          .setPlaceholder("5")
+          .setValue(String(this.plugin.settings.gitPushTimeout))
+          .onChange(async (value) => {
+            const n = parseInt(value);
+            if (!isNaN(n) && n >= 0) {
+              this.plugin.settings.gitPushTimeout = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+    this.addExampleHint(settingTimeout, "5");
 
     const setting11 = new Setting(containerEl)
       .setName("Commit 消息模板")

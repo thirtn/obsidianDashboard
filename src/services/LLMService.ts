@@ -1,4 +1,4 @@
-import { requestUrl } from "obsidian";
+import { App, requestUrl } from "obsidian";
 import { DashboardSettings, TokenUsage, TokenDay, BalanceItem } from "../types";
 import { VaultPersistenceService } from "./VaultPersistenceService";
 
@@ -13,16 +13,12 @@ export class LLMService {
   private vaultPath: string;
 
   constructor(
+    app: App,
     private settings: DashboardSettings,
     vaultPath?: string
   ) {
-    this.persistence = new VaultPersistenceService(null as any); // Will be set properly
-    this.vaultPath = vaultPath || ".dashboard/token-usage.json";
-  }
-
-  /** Must be called after construction to wire up the vault adapter */
-  setApp(app: any) {
     this.persistence = new VaultPersistenceService(app);
+    this.vaultPath = vaultPath || ".dashboard/token-usage.json";
   }
 
   updateSettings(settings: DashboardSettings) {
@@ -32,23 +28,14 @@ export class LLMService {
   async executeCommand(
     command: "ingest" | "query" | "lint-wiki",
     input: string,
-    onChunk?: (text: string) => void
+    onChunk?: (text: string) => void,
+    signal?: AbortSignal
   ): Promise<string> {
-    const systemPrompts: Record<string, string> = {
-      ingest: "You are a knowledge ingestion assistant. Process the following content and extract key information for the wiki.",
-      query: "You are a wiki assistant. Answer the following question based on the knowledge base.",
-      "lint-wiki": "You are a wiki linter. Review the following content and suggest improvements for clarity, structure, and completeness.",
-    };
+    if (onChunk) {
+      return this.executeCommandStreaming(command, input, onChunk, signal);
+    }
 
-    const body = JSON.stringify({
-      model: this.settings.modelName,
-      temperature: this.settings.temperature,
-      max_tokens: this.settings.maxTokens,
-      messages: [
-        { role: "system", content: systemPrompts[command] ?? "You are a helpful assistant." },
-        { role: "user", content: input },
-      ],
-    });
+    const body = this.buildRequestBody(command, input, false);
 
     const resp = await requestUrl({
       url: `${this.settings.apiBaseUrl}/chat/completions`,
@@ -57,15 +44,11 @@ export class LLMService {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.settings.apiKey}`,
       },
-      body,
+      body: JSON.stringify(body),
       throw: false,
     });
 
-    if (resp.status === 401) throw new Error("401: API Key 无效，请检查配置");
-    if (resp.status === 429) throw new Error("429: 请求过于频繁，请稍后重试");
-    if (resp.status === 408 || resp.status === 504) throw new Error("超时: 请求超时，请稍后重试");
-    if (resp.status >= 500) throw new Error(`服务器错误 (${resp.status})，请稍后重试`);
-    if (resp.status !== 200) throw new Error(`请求失败 (${resp.status}): ${resp.text}`);
+    this.throwOnErrorStatus(resp.status, resp.text);
 
     const data = resp.json;
     const content: string = data?.choices?.[0]?.message?.content ?? "";
@@ -74,6 +57,113 @@ export class LLMService {
     if (totalTokens > 0) this.recordLocalTokens(totalTokens);
 
     return content;
+  }
+
+  private buildRequestBody(
+    command: "ingest" | "query" | "lint-wiki",
+    input: string,
+    stream: boolean
+  ) {
+    const systemPrompts: Record<string, string> = {
+      ingest: "You are a knowledge ingestion assistant. Process the following content and extract key information for the wiki.",
+      query: "You are a wiki assistant. Answer the following question based on the knowledge base.",
+      "lint-wiki": "You are a wiki linter. Review the following content and suggest improvements for clarity, structure, and completeness.",
+    };
+
+    return {
+      model: this.settings.modelName,
+      temperature: this.settings.temperature,
+      max_tokens: this.settings.maxTokens,
+      stream,
+      messages: [
+        { role: "system", content: systemPrompts[command] ?? "You are a helpful assistant." },
+        { role: "user", content: input },
+      ],
+    };
+  }
+
+  private throwOnErrorStatus(status: number, text: string) {
+    if (status === 401) throw new Error("401: API Key 无效，请检查配置");
+    if (status === 429) throw new Error("429: 请求过于频繁，请稍后重试");
+    if (status === 408 || status === 504) throw new Error("超时: 请求超时，请稍后重试");
+    if (status >= 500) throw new Error(`服务器错误 (${status})，请稍后重试`);
+    if (status !== 200) throw new Error(`请求失败 (${status}): ${text}`);
+  }
+
+  private async executeCommandStreaming(
+    command: "ingest" | "query" | "lint-wiki",
+    input: string,
+    onChunk: (text: string) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const url = `${this.settings.apiBaseUrl}/chat/completions`;
+    let resp: Response;
+    try {
+      resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.settings.apiKey}`,
+        },
+        body: JSON.stringify(this.buildRequestBody(command, input, true)),
+        signal,
+      });
+    } catch (e: any) {
+      if (e?.name === "AbortError") throw e;
+      throw new Error("网络错误: 无法连接 API");
+    }
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      this.throwOnErrorStatus(resp.status, text);
+    }
+
+    if (!resp.body) {
+      throw new Error("流式响应不可用，请检查 API 是否支持 stream");
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    let totalTokens = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+
+        try {
+          const json = JSON.parse(payload);
+          const delta: string = json?.choices?.[0]?.delta?.content ?? "";
+          if (delta) {
+            full += delta;
+            onChunk(delta);
+          }
+          const usage = json?.usage?.total_tokens;
+          if (typeof usage === "number" && usage > 0) totalTokens = usage;
+        } catch {
+          /* skip malformed chunk */
+        }
+      }
+    }
+
+    if (totalTokens > 0) {
+      this.recordLocalTokens(totalTokens);
+    } else if (full.length > 0) {
+      this.recordLocalTokens(Math.max(1, Math.ceil(full.length / 4)));
+    }
+
+    return full;
   }
 
   async testConnection(): Promise<void> {

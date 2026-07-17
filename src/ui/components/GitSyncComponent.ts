@@ -11,6 +11,7 @@ export class GitSyncComponent extends BaseComponent {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private autoPushTimer: ReturnType<typeof setInterval> | null = null;
   private autoPushDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private modEl: HTMLElement | null = null;
 
   constructor(
     app: App,
@@ -27,17 +28,26 @@ export class GitSyncComponent extends BaseComponent {
 
   get id(): string { return "git-sync"; }
 
+  updateSettings(settings: DashboardSettings): void {
+    const oldPoll = this.settings.gitPollInterval;
+    super.updateSettings(settings);
+    if (oldPoll !== settings.gitPollInterval && this.pollTimer !== null) {
+      this.startPolling();
+    }
+  }
+
   async render(container: HTMLElement): Promise<void> {
     const mod = container.createDiv("dashboard-module");
     mod.id = "dashboard-git-module";
+    this.modEl = mod;
     this.buildHeader(mod);
     const body = mod.createDiv("dashboard-module-body");
     await this.buildBodyContent(body);
   }
 
   async update(): Promise<void> {
-    const mod = document.getElementById("dashboard-git-module");
-    if (!mod) return;
+    const mod = this.modEl;
+    if (!mod || !mod.isConnected) return;
     const existingBody = mod.querySelector(".dashboard-module-body");
     if (existingBody) existingBody.remove();
     const body = mod.createDiv("dashboard-module-body");
@@ -46,7 +56,9 @@ export class GitSyncComponent extends BaseComponent {
 
   startPolling() {
     this.stopPolling();
-    this.pollTimer = setInterval(() => this.update(), 5000);
+    const seconds = Math.max(0, this.settings.gitPollInterval ?? 30);
+    if (seconds === 0) return;
+    this.pollTimer = setInterval(() => this.update(), seconds * 1000);
   }
 
   stopPolling() {
@@ -217,7 +229,8 @@ export class GitSyncComponent extends BaseComponent {
       try {
         const result = await this.gitService.pull(
           this.settings.gitRemoteName, this.settings.gitBranchName,
-          this.settings.gitUsername || undefined, this.settings.gitPassword || undefined
+          this.settings.gitUsername || undefined, this.settings.gitPassword || undefined,
+          this.settings.gitPushTimeout
         );
         new Notice(result);
         await this.update();
@@ -295,12 +308,11 @@ export class GitSyncComponent extends BaseComponent {
       const msg = this.buildCommitMessage();
       await this.gitService.pushAll(
         this.settings.gitRemoteName, this.settings.gitBranchName, msg,
-        this.settings.gitUsername || undefined, this.settings.gitPassword || undefined
+        this.settings.gitUsername || undefined, this.settings.gitPassword || undefined,
+        this.settings.gitPushTimeout
       );
-      console.log("[yyDashboard] Auto push completed");
       new Notice("自动推送成功");
     } catch (e: any) {
-      console.log(`[yyDashboard] Auto push failed: ${e.message}`);
       new Notice(`自动推送失败: ${e.message}`);
     }
   }
@@ -497,20 +509,36 @@ export class GitSyncComponent extends BaseComponent {
           if (selected.length === 0) { new Notice("请至少选择一个文件"); return; }
           pushBtn.disabled = true;
           pushBtn.textContent = "推送中...";
+
+          let staged: string[] = [];
+          let committed = false;
           try {
-            const staged = await gitService.stageFiles(selected);
+            staged = await gitService.stageFiles(selected);
             await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
+            committed = true;
             await gitService.push(settings.gitRemoteName, settings.gitBranchName,
-              settings.gitUsername || undefined, settings.gitPassword || undefined);
+              settings.gitUsername || undefined, settings.gitPassword || undefined,
+              settings.gitPushTimeout);
             new Notice(staged.length === selected.length
               ? `已推送 ${staged.length} 个文件`
               : `已推送 ${staged.length} 个文件（${selected.length - staged.length} 个暂存失败）`);
             this.close();
             await view.update();
           } catch (e: any) {
-            new Notice(`Push 失败: ${e.message}`);
-            pushBtn.disabled = false;
-            pushBtn.textContent = "Commit & Push";
+            const isTimeout = e?.code === "TIMEOUT";
+            if (committed && isTimeout) {
+              new Notice(`推送超时，但已本地提交 ${staged.length} 个文件；请稍后到远程仓库确认是否已同步`, 8000);
+              this.close();
+              await view.update();
+            } else if (committed) {
+              new Notice(`本地已提交 ${staged.length} 个文件，但推送失败: ${e.message}`, 8000);
+              this.close();
+              await view.update();
+            } else {
+              new Notice(`Push 失败: ${e.message}`);
+              pushBtn.disabled = false;
+              pushBtn.textContent = "Commit & Push";
+            }
           }
         });
       }

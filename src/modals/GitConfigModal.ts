@@ -87,6 +87,30 @@ export class GitConfigModal extends Modal {
       );
     }
 
+    // Git status polling interval
+    this.createTextField(
+      contentEl,
+      "状态刷新间隔（秒）",
+      String(this.settings.gitPollInterval),
+      (v) => {
+        const n = parseInt(v);
+        if (!isNaN(n) && n >= 0) this.settings.gitPollInterval = n;
+      },
+      "30（0 = 关闭轮询，仅在 vault 变更时刷新）"
+    );
+
+    // Push/Pull timeout
+    this.createTextField(
+      contentEl,
+      "Push/Pull 超时（分钟）",
+      String(this.settings.gitPushTimeout),
+      (v) => {
+        const n = parseInt(v);
+        if (!isNaN(n) && n >= 0) this.settings.gitPushTimeout = n;
+      },
+      "5（0 = 不限时；大仓库首次推送可设 10 或更大）"
+    );
+
     // Commit template with preview
     this.createTextFieldWithPreview(
       contentEl,

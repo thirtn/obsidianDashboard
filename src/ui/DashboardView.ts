@@ -7,16 +7,20 @@ import { PluginManageService } from "../services/PluginManageService";
 import { HeatmapService } from "../services/HeatmapService";
 import { GitService } from "../services/GitService";
 import { RemotelySaveService } from "../services/RemotelySaveService";
+import { ReportService } from "../services/ReportService";
 import { BaseComponent } from "./components/BaseComponent";
 import { HeaderComponent } from "./components/HeaderComponent";
 import { SearchComponent } from "./components/SearchComponent";
+import { WorkspaceBarComponent } from "./components/WorkspaceBarComponent";
 import { FileStatsComponent } from "./components/FileStatsComponent";
 import { HeatmapComponent } from "./components/HeatmapComponent";
 import { LLMCommandComponent } from "./components/LLMCommandComponent";
+import { OperationLogComponent } from "./components/OperationLogComponent";
 import { GitSyncComponent } from "./components/GitSyncComponent";
 import { RemotelySaveComponent } from "./components/RemotelySaveComponent";
 import { TaskQuickAddComponent } from "./components/TaskQuickAddComponent";
 import { PluginManageComponent } from "./components/PluginManageComponent";
+import { isModuleCollapsed, setModuleCollapsed } from "./components/utils";
 
 export const DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
 
@@ -32,13 +36,16 @@ export class DashboardView extends ItemView {
   private heatmapService: HeatmapService;
   private gitService: GitService;
   private remotelySaveService: RemotelySaveService;
+  private reportService: ReportService;
 
   // Components
   private headerComponent!: HeaderComponent;
   private searchComponent!: SearchComponent;
+  private workspaceBarComponent!: WorkspaceBarComponent;
   private fileStatsComponent!: FileStatsComponent;
   private heatmapComponent!: HeatmapComponent;
   private llmCommandComponent!: LLMCommandComponent;
+  private operationLogComponent!: OperationLogComponent;
   private gitSyncComponent!: GitSyncComponent;
   private remotelySaveComponent!: RemotelySaveComponent;
   private taskQuickAddComponent!: TaskQuickAddComponent;
@@ -72,14 +79,12 @@ export class DashboardView extends ItemView {
     // Initialize services
     this.fileService = new FileService(this.app);
     this.logService = new LogService(this.app);
-    this.llmService = new LLMService(settings, settings.tokenUsageDataPath);
+    this.llmService = new LLMService(this.app, settings, settings.tokenUsageDataPath);
     this.pluginService = new PluginManageService(this.app);
     this.heatmapService = new HeatmapService(this.app, settings.heatmapDataPath);
     this.gitService = new GitService(this.app);
     this.remotelySaveService = new RemotelySaveService();
-
-    // Wire up vault persistence on LLMService
-    this.llmService.setApp(this.app);
+    this.reportService = new ReportService(this.app, settings);
 
     // Initialize components
     this.headerComponent = new HeaderComponent(
@@ -88,6 +93,7 @@ export class DashboardView extends ItemView {
       () => this.render()
     );
     this.searchComponent = new SearchComponent(this.app, settings);
+    this.workspaceBarComponent = new WorkspaceBarComponent(this.app, settings, this.fileService, this.reportService);
     this.fileStatsComponent = new FileStatsComponent(
       this.app, settings,
       async (s) => { await this.onSettingsChange(s); this.updateSettings(s); }
@@ -100,6 +106,7 @@ export class DashboardView extends ItemView {
       this.app, settings, this.llmService,
       () => this.headerComponent.refreshTokenBar()
     );
+    this.operationLogComponent = new OperationLogComponent(this.app, settings, this.logService);
     this.gitSyncComponent = new GitSyncComponent(
       this.app, settings, this.gitService,
       async (s) => { await this.onSettingsChange(s); this.updateSettings(s); },
@@ -116,9 +123,11 @@ export class DashboardView extends ItemView {
     this.components = {
       "header": this.headerComponent,
       "search": this.searchComponent,
+      "workspace-bar": this.workspaceBarComponent,
       "file-stats": this.fileStatsComponent,
       "heatmap": this.heatmapComponent,
       "llm-command": this.llmCommandComponent,
+      "operation-log": this.operationLogComponent,
       "git-sync": this.gitSyncComponent,
       "remotely-save": this.remotelySaveComponent,
       "task-quickadd": this.taskQuickAddComponent,
@@ -133,6 +142,7 @@ export class DashboardView extends ItemView {
   updateSettings(settings: DashboardSettings) {
     this.settings = settings;
     this.llmService.updateSettings(settings);
+    this.reportService.updateSettings(settings);
     // Propagate settings to all components
     for (const comp of Object.values(this.components)) {
       comp.updateSettings(settings);
@@ -186,11 +196,8 @@ export class DashboardView extends ItemView {
     // Vault change handler — debounced targeted updates
     this.onVaultChange = () => {
       if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
-      this.autoRefreshTimer = setTimeout(async () => {
-        const statsContainer = document.getElementById("dashboard-file-stats-container");
-        if (statsContainer) await this.fileStatsComponent.renderFileStats(statsContainer);
-        const recentContainer = document.getElementById("dashboard-recent-container");
-        if (recentContainer) this.fileStatsComponent.renderRecentFiles(recentContainer);
+      this.autoRefreshTimer = setTimeout(() => {
+        this.fileStatsComponent.refreshExternal();
       }, 800);
 
       // Refresh git on vault change (debounced to avoid excessive calls)
@@ -255,8 +262,11 @@ export class DashboardView extends ItemView {
     if (this.gitRefreshTimer) clearTimeout(this.gitRefreshTimer);
     if (this.visibilityTimer) clearInterval(this.visibilityTimer);
 
-    // Destroy components that hold timers
-    this.gitSyncComponent.destroy();
+    document.body.querySelectorAll(".dashboard-heatmap-tip, .dashboard-popover").forEach((el) => el.remove());
+
+    for (const comp of Object.values(this.components)) {
+      comp.destroy();
+    }
   }
 
   async render() {
@@ -281,31 +291,51 @@ export class DashboardView extends ItemView {
       const offscreen = document.createElement("div");
       offscreen.addClass("dashboard-root");
 
-      // Header + Search (always first, outside scroll)
+      // Header + Search + WorkspaceBar (always first, outside scroll)
       await this.headerComponent.render(offscreen);
       await this.searchComponent.render(offscreen);
+      await this.workspaceBarComponent.render(offscreen);
 
       const scroll = offscreen.createDiv("dashboard-scroll");
 
-      // Render modules in configured order
+      // Render modules in configured order (skip hidden ones)
       const order = this.settings.moduleOrder || [];
+      const visibility = this.settings.moduleVisibility || {};
+      const visibleOrder: string[] = [];
       for (const moduleId of order) {
+        if (visibility[moduleId] === false) continue;
         const comp = this.components[moduleId];
-        if (comp) {
-          await comp.render(scroll);
-        }
+        if (!comp) continue;
+        visibleOrder.push(moduleId);
+        await comp.render(scroll);
       }
 
-      // Drag-and-drop module reordering
+      // Drag-and-drop module reordering + collapse
       const moduleEls = scroll.querySelectorAll<HTMLElement>(".dashboard-module");
       moduleEls.forEach((modEl, index) => {
-        const moduleId = order[index];
+        const moduleId = visibleOrder[index];
         if (!moduleId) return;
 
         modEl.setAttribute("data-module-id", moduleId);
 
         const header = modEl.querySelector<HTMLElement>(".dashboard-module-header");
         if (!header) return;
+
+        // Apply collapsed state
+        if (isModuleCollapsed(moduleId)) {
+          modEl.classList.add("dashboard-module-collapsed");
+        }
+
+        // Collapse toggle
+        const toggle = document.createElement("span");
+        toggle.className = "dashboard-module-collapse-toggle";
+        toggle.innerHTML = "▾";
+        toggle.setAttribute("title", "折叠/展开");
+        toggle.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const collapsed = modEl.classList.toggle("dashboard-module-collapsed");
+          setModuleCollapsed(moduleId, collapsed);
+        });
 
         const handle = document.createElement("span");
         handle.className = "dashboard-module-drag-handle";
@@ -324,6 +354,7 @@ export class DashboardView extends ItemView {
           scroll.querySelectorAll(".dashboard-module").forEach(el => el.classList.remove("drag-over"));
         });
 
+        header.prepend(toggle);
         header.prepend(handle);
 
         modEl.addEventListener("dragover", (e) => {
