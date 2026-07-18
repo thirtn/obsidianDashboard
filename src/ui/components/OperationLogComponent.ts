@@ -36,19 +36,6 @@ export class OperationLogComponent extends BaseComponent {
     titleWrap.createEl("span", { text: "📋", cls: "dashboard-module-icon" });
     titleWrap.createEl("span", { text: "操作日志", cls: "dashboard-module-title" });
 
-    const openFolderBtn = header.createEl("button", {
-      cls: "dashboard-icon-btn",
-      title: "打开 wiki/log 目录",
-    });
-    openFolderBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
-    openFolderBtn.addEventListener("click", () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const logFile = this.app.vault.getAbstractFileByPath(`wiki/log/${today}.md`);
-      if (logFile instanceof TFile) {
-        this.app.workspace.getLeaf(false).openFile(logFile);
-      }
-    });
-
     const body = mod.createDiv("dashboard-module-body");
     const entries = await this.logService.getRecentLogs(8);
 

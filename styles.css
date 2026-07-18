@@ -1775,7 +1775,7 @@
   border-bottom: none;
 }
 .dashboard-module-collapsed > .dashboard-module-body {
-  display: none;
+  display: none !important;
 }
 
 /* ─── Workspace Bar ─────────────────────────────────────────────────────── */
