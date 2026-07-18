@@ -1,6 +1,10 @@
 import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { DashboardSettings, DEFAULT_SETTINGS, ReportType, MODULE_IDS, MODULE_LABELS, defaultModuleVisibility } from "./types";
+import { DashboardSettings, DEFAULT_SETTINGS, MODULE_IDS, MODULE_LABELS, defaultModuleVisibility } from "./types";
 import { DashboardView, DASHBOARD_VIEW_TYPE } from "./ui/DashboardView";
+import { renderLLMSettings, type SettingsContext } from "./modules/llm-command/settings";
+import { renderFileStatsSettings } from "./modules/file-stats/settings";
+import { renderReportSettings } from "./modules/heatmap/settings";
+import { renderGitSettings } from "./modules/git-sync/settings";
 
 export default class LLMWikiDashboardPlugin extends Plugin {
   settings!: DashboardSettings;
@@ -105,7 +109,12 @@ class DashboardSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Dashboard 设置" });
 
-    const setting1 = new Setting(containerEl)
+    const ctx: SettingsContext = {
+      settings: this.plugin.settings,
+      saveSettings: () => this.plugin.saveSettings(),
+    };
+
+    const s1 = new Setting(containerEl)
       .setName("标签页标题")
       .setDesc("自定义 Dashboard 标签页显示的名称，可随时修改")
       .addText((text) =>
@@ -117,9 +126,9 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    this.addExampleHint(setting1, "Dashboard");
+    this.addExampleHint(s1, "Dashboard");
 
-    const setting2 = new Setting(containerEl)
+    const s2 = new Setting(containerEl)
       .setName("标签页描述")
       .setDesc("显示在标签页标题下方的描述文字")
       .addText((text) =>
@@ -131,7 +140,7 @@ class DashboardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    this.addExampleHint(setting2, "禹思天下有溺者，由己溺之也");
+    this.addExampleHint(s2, "禹思天下有溺者，由己溺之也");
 
     new Setting(containerEl)
       .setName("启动时自动打开 Dashboard")
@@ -166,355 +175,10 @@ class DashboardSettingTab extends PluginSettingTab {
         );
     }
 
-    const setting3 = new Setting(containerEl)
-      .setName("API Base URL")
-      .setDesc("OpenAI Compatible 接口地址")
-      .addText((text) =>
-        text
-          .setPlaceholder("https://api.openai.com/v1")
-          .setValue(this.plugin.settings.apiBaseUrl)
-          .onChange(async (value) => {
-            this.plugin.settings.apiBaseUrl = value;
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting3, "https://api.openai.com/v1");
-
-    new Setting(containerEl)
-      .setName("API Key")
-      .setDesc("你的 API 密钥。⚠ 明文保存在 .obsidian/plugins/yy-obsidian-dashboard/data.json，若启用 Git 同步请确认已忽略该文件")
-      .addText((text) => {
-        text
-          .setPlaceholder("sk-...")
-          .setValue(this.plugin.settings.apiKey)
-          .onChange(async (value) => {
-            this.plugin.settings.apiKey = value;
-            await this.plugin.saveSettings();
-          });
-        text.inputEl.type = "password";
-      });
-
-    const setting4 = new Setting(containerEl)
-      .setName("模型名称")
-      .addText((text) =>
-        text
-          .setPlaceholder("gpt-4o")
-          .setValue(this.plugin.settings.modelName)
-          .onChange(async (value) => {
-            this.plugin.settings.modelName = value;
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting4, "gpt-4o");
-
-    new Setting(containerEl)
-      .setName("Temperature")
-      .addSlider((slider) =>
-        slider
-          .setLimits(0, 2, 0.1)
-          .setValue(this.plugin.settings.temperature)
-          .setDynamicTooltip()
-          .onChange(async (value) => {
-            this.plugin.settings.temperature = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Max Tokens")
-      .addText((text) =>
-        text
-          .setValue(String(this.plugin.settings.maxTokens))
-          .onChange(async (value) => {
-            const n = parseInt(value);
-            if (!isNaN(n)) {
-              this.plugin.settings.maxTokens = n;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("用量接口地址")
-      .setDesc("选填。填写后优先使用接口数据，否则用本地统计")
-      .addText((text) =>
-        text
-          .setPlaceholder("https://...")
-          .setValue(this.plugin.settings.tokenUsageApiUrl)
-          .onChange(async (value) => {
-            this.plugin.settings.tokenUsageApiUrl = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    const setting5 = new Setting(containerEl)
-      .setName("余额接口地址")
-      .setDesc("选填。如 DeepSeek: https://api.deepseek.com/user/balance")
-      .addText((text) =>
-        text
-          .setPlaceholder("https://...")
-          .setValue(this.plugin.settings.tokenBalanceApiUrl)
-          .onChange(async (value) => {
-            this.plugin.settings.tokenBalanceApiUrl = value;
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting5, "https://api.deepseek.com/user/balance");
-
-    new Setting(containerEl)
-      .setName("统计文件夹")
-      .setDesc("逗号分隔的文件夹路径列表，如 raw, wiki, raw/子目录")
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.trackedFolders.join(", "))
-          .onChange(async (value) => {
-            this.plugin.settings.trackedFolders = value
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean);
-            await this.plugin.saveSettings();
-          })
-      );
-
-    // ─── Report Configs ──────────────────────────────────────────────────────
-
-    containerEl.createEl("h3", { text: "报表配置" });
-
-    const reportLabels: Record<ReportType, string> = {
-      daily: "日报",
-      weekly: "周报",
-      monthly: "月报",
-      quarterly: "季报",
-      yearly: "年报",
-    };
-
-    for (const type of Object.keys(reportLabels) as ReportType[]) {
-      const cfg = this.plugin.settings.reportConfigs[type];
-      containerEl.createEl("h4", { text: reportLabels[type] });
-
-      new Setting(containerEl)
-        .setName("启用")
-        .addToggle((toggle) =>
-          toggle
-            .setValue(cfg.enabled)
-            .onChange(async (value) => {
-              cfg.enabled = value;
-              await this.plugin.saveSettings();
-            })
-        );
-
-      new Setting(containerEl)
-        .setName("新建时弹窗确认")
-        .setDesc("点击没有对应报告的日期时，是否先弹窗确认再新建")
-        .addToggle((toggle) =>
-          toggle
-            .setValue(cfg.confirmBeforeCreate)
-            .onChange(async (value) => {
-              cfg.confirmBeforeCreate = value;
-              await this.plugin.saveSettings();
-            })
-        );
-
-      new Setting(containerEl)
-        .setName("存放目录")
-        .setDesc("文件存储的根目录")
-        .addText((text) =>
-          text
-            .setValue(cfg.directory)
-            .onChange(async (value) => {
-              cfg.directory = value.trim();
-              await this.plugin.saveSettings();
-            })
-        );
-
-      new Setting(containerEl)
-        .setName("文件路径格式")
-        .setDesc(`支持 YYYY/YY/MM/M/DD/D 等 moment.js 格式令牌。如 YYYY/MM/YYYY-MM-DD`)
-        .addText((text) =>
-          text
-            .setValue(cfg.filenameFormat)
-            .onChange(async (value) => {
-              cfg.filenameFormat = value.trim();
-              await this.plugin.saveSettings();
-            })
-        );
-
-      new Setting(containerEl)
-        .setName("模板路径")
-        .setDesc("vault 中的模板文件路径（不含 .md 后缀），留空则不使用模板")
-        .addText((text) =>
-          text
-            .setValue(cfg.templatePath)
-            .onChange(async (value) => {
-              cfg.templatePath = value.trim();
-              await this.plugin.saveSettings();
-            })
-        );
-    }
-
-    // ─── Git Sync Config ──────────────────────────────────────────────────────
-
-    containerEl.createEl("h3", { text: "Git 同步 (GitHub)" });
-
-    new Setting(containerEl)
-      .setName("启用 Git 同步")
-      .setDesc("开启后可在 Dashboard 中进行 Push/Pull 操作")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.gitEnabled)
-          .onChange(async (value) => {
-            this.plugin.settings.gitEnabled = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    const setting6 = new Setting(containerEl)
-      .setName("仓库地址")
-      .setDesc("GitHub 仓库 HTTPS 地址，如 https://github.com/username/repo.git")
-      .addText((text) =>
-        text
-          .setPlaceholder("https://github.com/username/repo.git")
-          .setValue(this.plugin.settings.gitRemoteURL)
-          .onChange(async (value) => {
-            this.plugin.settings.gitRemoteURL = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting6, "https://github.com/username/repo.git");
-
-    const setting7 = new Setting(containerEl)
-      .setName("远程名称")
-      .setDesc("Git remote 名称，默认 origin")
-      .addText((text) =>
-        text
-          .setPlaceholder("origin")
-          .setValue(this.plugin.settings.gitRemoteName)
-          .onChange(async (value) => {
-            this.plugin.settings.gitRemoteName = value.trim() || "origin";
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting7, "origin");
-
-    const setting8 = new Setting(containerEl)
-      .setName("分支名")
-      .setDesc("默认分支名，如 main 或 master")
-      .addText((text) =>
-        text
-          .setPlaceholder("main")
-          .setValue(this.plugin.settings.gitBranchName)
-          .onChange(async (value) => {
-            this.plugin.settings.gitBranchName = value.trim() || "main";
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting8, "main");
-
-    const setting9 = new Setting(containerEl)
-      .setName("GitHub 用户名")
-      .setDesc("GitHub 登录用户名或邮箱")
-      .addText((text) =>
-        text
-          .setPlaceholder("your-username")
-          .setValue(this.plugin.settings.gitUsername)
-          .onChange(async (value) => {
-            this.plugin.settings.gitUsername = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting9, "your-username");
-
-    new Setting(containerEl)
-      .setName("GitHub Token")
-      .setDesc("GitHub 私人令牌（https://github.com/settings/tokens）。⚠ 明文保存在 .obsidian/plugins/yy-obsidian-dashboard/data.json，请务必将该文件加入 .gitignore，避免同步到远程仓库")
-      .addText((text) => {
-        text
-          .setPlaceholder("your-token")
-          .setValue(this.plugin.settings.gitPassword)
-          .onChange(async (value) => {
-            this.plugin.settings.gitPassword = value.trim();
-            await this.plugin.saveSettings();
-          });
-        text.inputEl.type = "password";
-      });
-
-    new Setting(containerEl)
-      .setName("自动 Push")
-      .setDesc("开启后按设定的时间间隔自动 push")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.gitAutoPushEnabled)
-          .onChange(async (value) => {
-            this.plugin.settings.gitAutoPushEnabled = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    const setting10 = new Setting(containerEl)
-      .setName("自动 Push 间隔（分钟）")
-      .setDesc("设为 0 表示每次 vault 变更后自动 push")
-      .addText((text) =>
-        text
-          .setPlaceholder("30")
-          .setValue(String(this.plugin.settings.gitAutoPushInterval))
-          .onChange(async (value) => {
-            const n = parseInt(value);
-            if (!isNaN(n) && n >= 0) {
-              this.plugin.settings.gitAutoPushInterval = n;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-    this.addExampleHint(setting10, "30");
-
-    const settingPoll = new Setting(containerEl)
-      .setName("Git 状态刷新间隔（秒）")
-      .setDesc("Dashboard 中 Git 模块自动刷新 status 的间隔。设为 0 表示不轮询（仍会在 vault 变更时刷新）")
-      .addText((text) =>
-        text
-          .setPlaceholder("30")
-          .setValue(String(this.plugin.settings.gitPollInterval))
-          .onChange(async (value) => {
-            const n = parseInt(value);
-            if (!isNaN(n) && n >= 0) {
-              this.plugin.settings.gitPollInterval = n;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-    this.addExampleHint(settingPoll, "30");
-
-    const settingTimeout = new Setting(containerEl)
-      .setName("Push/Pull 超时（分钟）")
-      .setDesc("网络传输超时时间。设为 0 表示不限时；大仓库首次推送建议设 10 或更大")
-      .addText((text) =>
-        text
-          .setPlaceholder("5")
-          .setValue(String(this.plugin.settings.gitPushTimeout))
-          .onChange(async (value) => {
-            const n = parseInt(value);
-            if (!isNaN(n) && n >= 0) {
-              this.plugin.settings.gitPushTimeout = n;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-    this.addExampleHint(settingTimeout, "5");
-
-    const setting11 = new Setting(containerEl)
-      .setName("Commit 消息模板")
-      .setDesc("支持 {{date}} 和 {{time}} 占位符")
-      .addText((text) =>
-        text
-          .setPlaceholder("auto: {{date}} {{time}}")
-          .setValue(this.plugin.settings.gitCommitTemplate)
-          .onChange(async (value) => {
-            this.plugin.settings.gitCommitTemplate = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
-    this.addExampleHint(setting11, "auto: {{date}} {{time}}");
-    this.addCommitPreview(setting11);
+    renderLLMSettings(containerEl, ctx);
+    renderFileStatsSettings(containerEl, ctx);
+    renderReportSettings(containerEl, ctx);
+    renderGitSettings(containerEl, ctx);
   }
 
   private addExampleHint(setting: Setting, example: string) {
@@ -526,24 +190,5 @@ class DashboardSettingTab extends PluginSettingTab {
       input.dispatchEvent(new Event("input"));
     });
     setting.controlEl.appendChild(hint);
-  }
-
-  private addCommitPreview(setting: Setting) {
-    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
-    if (!input) return;
-    const preview = createSpan({ cls: "dashboard-format-preview" });
-    const updatePreview = () => {
-      const now = new Date();
-      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      const time = now.toTimeString().slice(0, 8);
-      const val = input.value || input.placeholder;
-      const example = val
-        .replace(/\{\{date\}\}/g, date)
-        .replace(/\{\{time\}\}/g, time);
-      preview.textContent = `示例: ${example}`;
-    };
-    updatePreview();
-    input.addEventListener("input", updatePreview);
-    setting.descEl.appendChild(preview);
   }
 }

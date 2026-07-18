@@ -1,8 +1,23 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
+import { execSync } from "child_process";
 
 const prod = process.argv[2] === "production";
+
+const cssConcatPlugin = {
+  name: "css-concat",
+  setup(build) {
+    build.onEnd(() => {
+      try {
+        execSync("cat styles/*.css > styles.css");
+        console.log("  CSS: concatenated styles/*.css → styles.css");
+      } catch (e) {
+        console.error("  CSS concat failed:", e.message);
+      }
+    });
+  },
+};
 
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
@@ -29,6 +44,7 @@ const context = await esbuild.context({
   sourcemap: prod ? false : "inline",
   treeShaking: true,
   outfile: "main.js",
+  plugins: [cssConcatPlugin],
 });
 
 if (prod) {

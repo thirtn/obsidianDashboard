@@ -1,83 +1,19 @@
-export interface FolderStat {
-  name: string;
-  count: number;
-}
+export type { FolderStat, FileStats } from "./modules/file-stats/types";
 
-export interface FileStats {
-  total: number;
-  folderStats: FolderStat[];
-  orphanCount: number;
-  nosourceCount: number;
-  emptyCount: number;
-  healthScore: number;
-  orphanFiles: string[];
-  nosourceFiles: string[];
-  emptyFilesList: string[];
-}
+export type { LogType, LogEntry } from "./modules/operation-log/types";
 
-export type LogType = "ingest" | "query" | "lint" | "unknown";
+export type { TokenDay, BalanceItem, TokenUsage } from "./modules/llm-command/types";
 
-export interface LogEntry {
-  type: LogType;
-  target: string;
-  time: string;
-  raw: string;
-}
+export type { HeatmapData, ReportType, ReportConfig, ReportSettings } from "./modules/heatmap/types";
+export { REPORT_LABELS } from "./modules/heatmap/types";
 
-export interface TokenDay {
-  date: string;
-  tokens: number;
-}
+export type { PluginInfo } from "./modules/plugin-manage/types";
 
-export interface BalanceItem {
-  currency: string;
-  total_balance: string;
-  granted_balance: string;
-  topped_up_balance: string;
-}
-
-export interface TokenUsage {
-  today: number;
-  thisMonth: number;
-  remaining: number | null;
-  dailyBreakdown: TokenDay[];
-  balanceInfo: BalanceItem[] | null;
-}
-
-export interface HeatmapData {
-  [date: string]: number;
-}
-
-export interface PluginInfo {
-  id: string;
-  name: string;
-  version: string;
-  enabled: boolean;
-  hasSettings: boolean;
-  description: string;
-}
-
-// ─── Report Config ──────────────────────────────────────────────────────────
-
-export type ReportType = "daily" | "weekly" | "monthly" | "quarterly" | "yearly";
-
-export interface ReportConfig {
-  enabled: boolean;
-  confirmBeforeCreate: boolean;
-  directory: string;       // e.g. "raw/dayReport"
-  filenameFormat: string;  // moment-style tokens, relative to directory
-  templatePath: string;    // path to template file in vault
-}
-
-export type ReportSettings = Record<ReportType, ReportConfig>;
-
-export const REPORT_LABELS: Record<ReportType, string> = {
-  daily: "日报",
-  weekly: "周报",
-  monthly: "月报",
-  quarterly: "季报",
-  yearly: "年报",
-};
+import type { ReportSettings } from "./modules/heatmap/types";
+import type { TaskDefaults } from "./modules/task-quickadd/types";
+import { DEFAULT_TASK_DEFAULTS } from "./modules/task-quickadd/types";
+export type { TaskDefaults };
+export { DEFAULT_TASK_DEFAULTS };
 
 /** Scrollable dashboard module IDs (excludes fixed header/search/workspace-bar) */
 export const MODULE_IDS = [
@@ -149,7 +85,6 @@ export interface DashboardSettings {
   gitAutoPushInterval: number;
   gitPollInterval: number;
   gitPushTimeout: number;
-  gitPollInterval: number;
   gitCommitTemplate: string;
   // Module order (drag-and-drop)
   moduleOrder: string[];
@@ -161,22 +96,6 @@ export interface DashboardSettings {
   heatmapDataPath: string;
   tokenUsageDataPath: string;
 }
-
-export interface TaskDefaults {
-  urgent: string;
-  normal: string;
-  low: string;
-  ongoing: string;
-  ongoingPercent: string;
-}
-
-export const DEFAULT_TASK_DEFAULTS: TaskDefaults = {
-  urgent: "",
-  normal: "",
-  low: "",
-  ongoing: "",
-  ongoingPercent: "0",
-};
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
   apiBaseUrl: "https://api.openai.com/v1",
