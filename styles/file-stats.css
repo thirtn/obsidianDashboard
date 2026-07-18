@@ -1,0 +1,175 @@
+/* ─── Module: File Stats ────────────────────────────────────────────────── */
+.dashboard-stat-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.dashboard-stat-total strong {
+  font-size: var(--font-ui-medium);
+  color: var(--text-accent);
+}
+
+/* Folder bar list */
+.dashboard-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.dashboard-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.dashboard-folder-row-name {
+  width: 160px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dashboard-folder-row-name:hover {
+  color: var(--text-accent);
+}
+
+.dashboard-folder-row-bar-wrap {
+  flex: 1;
+  height: 8px;
+  background: var(--background-modifier-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.dashboard-folder-row-bar-fill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+  min-width: 2px;
+}
+
+.dashboard-folder-row-count {
+  width: 28px;
+  text-align: right;
+  color: var(--text-normal);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dashboard-anomaly-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.dashboard-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.dashboard-badge-ok {
+  background: var(--background-modifier-success);
+  color: var(--text-success);
+}
+
+.dashboard-badge-warn {
+  background: color-mix(in srgb, var(--color-orange) 15%, transparent);
+  color: var(--color-orange);
+}
+
+/* Health score as real progress bar */
+.dashboard-health {
+  margin-top: 8px;
+}
+
+.dashboard-health-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.dashboard-health-label strong {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.dashboard-health-track {
+  height: 6px;
+  background: var(--background-modifier-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.dashboard-health-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+/* Recently modified files */
+.dashboard-recent-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.dashboard-recent-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.dashboard-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dashboard-recent-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.dashboard-recent-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.dashboard-recent-path {
+  color: var(--text-normal);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.dashboard-recent-path:hover {
+  color: var(--text-accent);
+}
+
+.dashboard-recent-time {
+  color: var(--text-faint);
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}

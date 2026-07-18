@@ -1,0 +1,303 @@
+/* ─── Module: Git Sync ───────────────────────────────────────────────────── */
+
+.dashboard-git-mobile-hint {
+  padding: 12px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  text-align: center;
+}
+
+.dashboard-git-notice {
+  padding: 10px 0 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.dashboard-git-init-btn {
+  width: 100%;
+}
+
+.dashboard-git-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.dashboard-git-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dashboard-git-status-dot.clean {
+  background: var(--color-green);
+}
+
+.dashboard-git-status-dot.dirty {
+  background: var(--color-yellow);
+}
+
+.dashboard-git-status-text {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+.dashboard-git-files-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.dashboard-git-files-link:hover {
+  color: var(--text-accent);
+}
+
+.dashboard-git-warn {
+  width: 100%;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-warning);
+  margin-top: 2px;
+}
+
+.dashboard-git-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.dashboard-git-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dashboard-git-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.dashboard-git-auto-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+}
+
+.dashboard-git-auto-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+.dashboard-git-auto-label input[type="checkbox"] {
+  margin: 0;
+}
+
+.dashboard-git-auto-hint {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.dashboard-git-commits {
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.dashboard-git-commits-title {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  display: block;
+}
+
+.dashboard-git-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: var(--font-ui-smaller);
+}
+
+.dashboard-git-commit-hash {
+  font-family: var(--font-monospace);
+  color: var(--text-accent);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.dashboard-git-commit-hash:hover {
+  text-decoration: underline;
+}
+
+.dashboard-git-commit-author {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-git-commit-msg {
+  flex: 1;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-git-commit-date {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+/* ─── Git Config Modal ──────────────────────────────────────────────────── */
+
+.dashboard-git-config-modal {
+  min-width: 420px;
+}
+
+.dashboard-git-config-row {
+  display: flex;
+  gap: 12px;
+}
+
+.dashboard-git-config-half {
+  flex: 1;
+}
+
+.dashboard-git-config-label {
+  display: block;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 4px;
+}
+
+/* ─── Push Confirm Modal ────────────────────────────────────────────────── */
+
+.dashboard-push-confirm-modal {
+  min-width: 460px;
+  max-width: 560px;
+}
+
+.dashboard-push-confirm-modal h3 {
+  margin-bottom: 6px;
+}
+
+.dashboard-push-confirm-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 12px;
+}
+
+.dashboard-push-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s);
+}
+
+.dashboard-push-commit-row label {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dashboard-push-commit-input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+}
+
+.dashboard-push-file-list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  margin-bottom: 12px;
+}
+
+.dashboard-push-select-all {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.dashboard-push-check-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+}
+
+.dashboard-push-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.dashboard-push-file-row:last-child {
+  border-bottom: none;
+}
+
+.dashboard-push-status {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.dashboard-push-status-unstaged {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.dashboard-push-status-staged {
+  background: var(--color-green);
+  color: #fff;
+}
+
+.dashboard-push-file-path {
+  flex: 1;
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
