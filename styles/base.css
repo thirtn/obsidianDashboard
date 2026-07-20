@@ -50,6 +50,8 @@
 }
 
 .dashboard-icon-btn {
+  -webkit-appearance: none;
+  appearance: none;
   background: none;
   border: none;
   cursor: pointer;
@@ -134,7 +136,7 @@
 
 /* ─── Module Card ───────────────────────────────────────────────────────── */
 .dashboard-module {
-  margin-top: 12px;
+  margin-top: clamp(6px, 1vw, 12px);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   overflow: hidden;
@@ -144,7 +146,7 @@
 .dashboard-module-header {
   display: flex;
   align-items: center;
-  padding: 8px 12px;
+  padding: clamp(4px, 0.8vw, 8px) clamp(8px, 1.2vw, 12px);
   background: var(--background-secondary-alt);
   border-bottom: 1px solid var(--background-modifier-border);
 }
@@ -152,30 +154,30 @@
 .dashboard-module-title-wrap {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: clamp(4px, 0.6vw, 6px);
 }
 
 .dashboard-module-title {
   font-weight: 600;
-  font-size: var(--font-ui-small);
+  font-size: clamp(12px, 1.8vw, var(--font-ui-small));
   color: var(--text-normal);
 }
 
 .dashboard-module-icon {
-  font-size: var(--font-ui-small);
+  font-size: clamp(12px, 1.8vw, var(--font-ui-small));
 }
 
 .dashboard-module-badge {
-  font-size: 11px;
+  font-size: clamp(9px, 1vw, 11px);
   color: var(--text-muted);
   background: var(--background-modifier-hover);
-  padding: 1px 8px;
+  padding: clamp(0px, 0.15vw, 1px) clamp(4px, 0.8vw, 8px);
   border-radius: 10px;
-  margin-left: 8px;
+  margin-left: clamp(4px, 0.8vw, 8px);
 }
 
 .dashboard-module-body {
-  padding: 10px 12px;
+  padding: clamp(6px, 1vw, 10px) clamp(8px, 1.2vw, 12px);
 }
 
 /* ─── Search ─────────────────────────────────────────────────────────────── */
@@ -580,8 +582,8 @@
 .dashboard-module-drag-handle {
   cursor: grab;
   color: var(--text-faint);
-  font-size: 14px;
-  margin-right: 8px;
+  font-size: clamp(11px, 1.4vw, 14px);
+  margin-right: clamp(4px, 0.8vw, 8px);
   user-select: none;
   line-height: 1;
   letter-spacing: -2px;
@@ -603,9 +605,9 @@
 .dashboard-module-collapse-toggle {
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 18px;
-  margin-right: 8px;
-  padding: 2px 6px;
+  font-size: clamp(14px, 2vw, 18px);
+  margin-right: clamp(4px, 0.8vw, 8px);
+  padding: 2px clamp(4px, 0.8vw, 6px);
   border-radius: 4px;
   user-select: none;
   line-height: 1;
@@ -613,8 +615,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 22px;
-  height: 22px;
+  min-width: clamp(18px, 2.5vw, 22px);
+  height: clamp(18px, 2.5vw, 22px);
 }
 .dashboard-module-collapse-toggle:hover {
   color: var(--text-normal);

@@ -20,5 +20,8 @@
     "obsidian": "latest",
     "tslib": "^2.6.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "xregexp": "^5.1.2"
   }
 }

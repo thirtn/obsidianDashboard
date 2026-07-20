@@ -25,6 +25,7 @@ export const MODULE_IDS = [
   "remotely-save",
   "task-quickadd",
   "plugin-manage",
+  "voice-transcription",
 ] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];
@@ -38,10 +39,13 @@ export const MODULE_LABELS: Record<ModuleId, string> = {
   "remotely-save": "云同步记录",
   "task-quickadd": "快速添加任务",
   "plugin-manage": "插件管理",
+  "voice-transcription": "语音转文字",
 };
 
 export function defaultModuleVisibility(): Record<string, boolean> {
-  return Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
+  const all = Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
+  all["voice-transcription"] = false;
+  return all;
 }
 
 const defaultReportConfigs: ReportSettings = {
@@ -90,11 +94,16 @@ export interface DashboardSettings {
   moduleOrder: string[];
   // Per-module visibility toggles
   moduleVisibility: Record<string, boolean>;
+  // Per-module device visibility ("both" | "desktop" | "mobile")
+  moduleDeviceVisibility: Record<string, "both" | "desktop" | "mobile">;
   // Open dashboard when Obsidian starts
   openOnStartup: boolean;
   // Vault persistence paths
   heatmapDataPath: string;
   tokenUsageDataPath: string;
+  // Voice transcription
+  whisperModelName: string;
+  whisperApiBaseUrl: string;
 }
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
@@ -134,7 +143,20 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
     "plugin-manage",
   ],
   moduleVisibility: defaultModuleVisibility(),
+  moduleDeviceVisibility: {
+    "file-stats": "both",
+    "heatmap": "both",
+    "llm-command": "both",
+    "operation-log": "both",
+    "git-sync": "desktop",
+    "remotely-save": "both",
+    "task-quickadd": "both",
+    "plugin-manage": "desktop",
+    "voice-transcription": "both",
+  },
   openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
   tokenUsageDataPath: ".dashboard/token-usage.json",
+  whisperModelName: "whisper-1",
+  whisperApiBaseUrl: "",
 };

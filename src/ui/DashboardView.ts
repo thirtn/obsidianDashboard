@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, Platform, WorkspaceLeaf } from "obsidian";
 import { DashboardSettings } from "../types";
 import { FileService } from "../services/FileService";
 import { LogService } from "../modules/operation-log/LogService";
@@ -20,6 +20,7 @@ import { GitSyncComponent } from "../modules/git-sync/GitSyncComponent";
 import { RemotelySaveComponent } from "../modules/remotely-save/RemotelySaveComponent";
 import { TaskQuickAddComponent } from "../modules/task-quickadd/TaskQuickAddComponent";
 import { PluginManageComponent } from "../modules/plugin-manage/PluginManageComponent";
+import { VoiceTranscriptionComponent } from "../modules/voice-transcription/VoiceTranscriptionComponent";
 
 export const DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
 
@@ -48,6 +49,7 @@ export class DashboardView extends ItemView {
   private remotelySaveComponent!: RemotelySaveComponent;
   private taskQuickAddComponent!: TaskQuickAddComponent;
   private pluginManageComponent!: PluginManageComponent;
+  private voiceTranscriptionComponent!: VoiceTranscriptionComponent;
 
   // Component map by ID (for moduleOrder lookup)
   private components: Record<string, BaseComponent> = {};
@@ -115,6 +117,10 @@ export class DashboardView extends ItemView {
       async (s) => { await this.onSettingsChange(s); this.updateSettings(s); }
     );
     this.pluginManageComponent = new PluginManageComponent(this.app, settings);
+    this.voiceTranscriptionComponent = new VoiceTranscriptionComponent(
+      this.app, settings,
+      async (s) => { await this.onSettingsChange(s); this.updateSettings(s); }
+    );
 
     // Build component map
     this.components = {
@@ -129,6 +135,7 @@ export class DashboardView extends ItemView {
       "remotely-save": this.remotelySaveComponent,
       "task-quickadd": this.taskQuickAddComponent,
       "plugin-manage": this.pluginManageComponent,
+      "voice-transcription": this.voiceTranscriptionComponent,
     };
   }
 
@@ -295,12 +302,18 @@ export class DashboardView extends ItemView {
 
       const scroll = offscreen.createDiv("dashboard-scroll");
 
-      // Render modules in configured order (skip hidden ones)
+      // Render modules in configured order (skip hidden or wrong-device ones)
       const order = this.settings.moduleOrder || [];
       const visibility = this.settings.moduleVisibility || {};
+      const deviceVisibility = this.settings.moduleDeviceVisibility || {};
+      const isPhone = Platform.isPhone;
       const visibleOrder: string[] = [];
       for (const moduleId of order) {
         if (visibility[moduleId] === false) continue;
+        // Device filter: "desktop" hides on phone, "mobile" hides on desktop
+        const device = deviceVisibility[moduleId] || "both";
+        if (device === "desktop" && isPhone) continue;
+        if (device === "mobile" && !isPhone) continue;
         const comp = this.components[moduleId];
         if (!comp) continue;
         visibleOrder.push(moduleId);

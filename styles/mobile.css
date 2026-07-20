@@ -1,0 +1,431 @@
+/* ─── Mobile Responsive ─────────────────────────────────────────────────── */
+/* iOS 手机屏幕约 390-430px，平板约 768-1024px */
+
+@media (max-width: 480px) {
+  /* Scroll container */
+  .dashboard-scroll {
+    padding: 0 8px 16px;
+  }
+
+  /* Header */
+  .dashboard-header {
+    padding: 10px 8px 6px;
+  }
+
+  .dashboard-header-title-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .dashboard-header-meta {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Touch-friendly icon buttons - dashboard header only */
+  .dashboard-header .dashboard-icon-btn {
+    padding: 8px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  /* Header token chips */
+  .dashboard-header-token {
+    gap: 4px;
+  }
+
+  .dashboard-token-chip {
+    font-size: 10px;
+    padding: 2px 6px;
+    gap: 3px;
+  }
+
+  /* Module card - keep all headers single-line, same height */
+  .dashboard-module-header {
+    flex-wrap: nowrap;
+    gap: 2px;
+    min-height: 0;
+  }
+
+  .dashboard-module-title-wrap {
+    gap: 2px;
+  }
+
+  /* All header interactive elements - same height */
+  .dashboard-module-collapse-toggle,
+  .dashboard-module-header .dashboard-icon-btn,
+  .dashboard-module-header .dashboard-heatmap-config-btn {
+    height: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    box-sizing: border-box;
+    line-height: 1;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  /* Heatmap year nav - reduce gap */
+  .dashboard-heatmap-year-nav {
+    gap: 2px;
+  }
+
+  .dashboard-heatmap-year-label {
+    min-width: 24px;
+    font-size: 10px;
+  }
+
+  .dashboard-heatmap-year-arrow {
+    font-size: 10px;
+  }
+
+  /* Workspace bar - hide on mobile */
+  .dashboard-workspace-bar {
+    display: none;
+  }
+
+  /* Search */
+  .dashboard-search-wrap {
+    margin: 0 8px 6px;
+  }
+
+  .dashboard-search-input {
+    padding: 10px 12px;
+    font-size: 14px; /* 防止 iOS 缩放 */
+  }
+
+  .dashboard-search-dropdown {
+    max-height: 200px;
+  }
+
+  /* Token stats - stack vertically */
+  .dashboard-token-stats {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .dashboard-token-stat-cell {
+    padding: 8px;
+  }
+
+  .dashboard-token-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .dashboard-token-val {
+    width: auto;
+    min-width: 48px;
+  }
+
+  /* Folder rows */
+  .dashboard-folder-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .dashboard-folder-row-name {
+    width: 100%;
+    margin-bottom: 2px;
+  }
+
+  .dashboard-folder-row-count {
+    width: auto;
+    min-width: 24px;
+  }
+
+  /* File stats total row */
+  .dashboard-stat-total {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Checkbox grid - single column */
+  .dashboard-checkbox-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  /* Plugin table - let it scroll horizontally */
+  .dashboard-plugin-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dashboard-plugin-table {
+    font-size: 10px;
+  }
+
+  .dashboard-plugin-desc {
+    max-width: 100px;
+    font-size: 9px;
+  }
+
+  .dashboard-plugin-table th,
+  .dashboard-plugin-table td {
+    padding: 4px;
+  }
+
+  /* Toggle switch - larger touch target */
+  .dashboard-toggle {
+    width: 40px;
+    height: 22px;
+  }
+
+  .dashboard-toggle-slider::before {
+    width: 16px;
+    height: 16px;
+    left: 3px;
+    top: 3px;
+  }
+
+  .dashboard-toggle input:checked + .dashboard-toggle-slider::before {
+    transform: translateX(18px);
+  }
+
+  /* Git module */
+  .dashboard-git-status {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .dashboard-git-actions {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .dashboard-git-btn {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+
+  .dashboard-git-commit-row {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 0;
+  }
+
+  .dashboard-git-commit-author {
+    max-width: 60px;
+  }
+
+  .dashboard-git-commit-msg {
+    min-width: 100%;
+    order: 3;
+  }
+
+  .dashboard-git-auto-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .dashboard-git-commits-title {
+    margin-top: 4px;
+  }
+
+  /* Task quick add */
+  .dashboard-task-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .dashboard-task-label {
+    width: 100%;
+    font-size: 13px;
+  }
+
+  .dashboard-task-input {
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+
+  .dashboard-task-add-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+
+  /* Heatmap */
+  .dashboard-heatmap-main-wrap {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .dashboard-heatmap-days {
+    flex-direction: row;
+    width: 100%;
+    gap: 3px;
+    overflow-x: auto;
+  }
+
+  .dashboard-heatmap-days-spacer {
+    display: none;
+  }
+
+  .dashboard-heatmap-day-label {
+    width: 12px;
+    text-align: center;
+  }
+
+  .dashboard-heatmap-months-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  .dashboard-heatmap-legend-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .dashboard-heatmap-stats {
+    font-size: 10px;
+    gap: 8px;
+  }
+
+  /* Sync module */
+  .dashboard-sync-session-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .dashboard-sync-time {
+    min-width: auto;
+    font-size: 10px;
+  }
+
+  .dashboard-sync-badges {
+    gap: 4px;
+  }
+
+  .dashboard-sync-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+  }
+
+  .dashboard-sync-files {
+    padding: 0 8px 6px 20px;
+  }
+
+  /* LLM command */
+  .dashboard-cmd-input {
+    min-height: 56px;
+    font-size: 14px;
+  }
+
+  .dashboard-result-pre {
+    font-size: 10px;
+    max-height: 150px;
+  }
+
+  .dashboard-exec-btn {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  /* Operation log */
+  .dashboard-log-row {
+    grid-template-columns: 36px 1fr;
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .dashboard-log-time {
+    grid-column: 1 / -1;
+    text-align: right;
+  }
+
+  /* Voice transcription */
+  .dashboard-voice-record-btn {
+    min-width: 140px;
+    padding: 12px 28px;
+    font-size: 15px;
+  }
+
+  .dashboard-voice-timer {
+    font-size: 1.5em;
+    min-height: 36px;
+    line-height: 36px;
+  }
+
+  .dashboard-voice-result {
+    min-height: 60px;
+    max-height: 150px;
+    font-size: 14px;
+  }
+
+  /* Popover */
+  .dashboard-popover {
+    min-width: 160px;
+    max-width: 280px;
+    max-height: 240px;
+  }
+
+  /* Modals - remove fixed min-width */
+  .dashboard-git-config-modal,
+  .dashboard-task-defaults-modal,
+  .dashboard-push-confirm-modal {
+    min-width: auto;
+    max-width: 100%;
+  }
+
+  .dashboard-git-config-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .dashboard-push-commit-row {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .dashboard-push-file-row {
+    padding: 5px 8px;
+    gap: 4px;
+  }
+
+  /* Report tabs */
+  .dashboard-report-tabs {
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+
+  .dashboard-report-tab {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  /* Radio group - allow wrapping */
+  .dashboard-radio-group {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  /* Connection status - give more space */
+  .dashboard-connection-status {
+    font-size: var(--font-ui-small);
+  }
+
+  /* Select elements - larger touch target */
+  .dashboard-select,
+  .dashboard-model-select {
+    padding: 8px;
+    font-size: 14px;
+  }
+}
+
+/* ─── iOS-specific overrides ──────────────────────────────────────────── */
+/* Obsidian mobile 会在 body 上加 is-phone / is-tablet 类 */
+body.is-phone .dashboard-root {
+  /* Prevent iOS rubber-banding from interfering with scroll */
+  -webkit-overflow-scrolling: touch;
+}
+
+body.is-phone .dashboard-scroll {
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 48px; /* 底部留白，避免被 iOS 底部横条遮挡 */
+}

@@ -80,6 +80,12 @@ export default class LLMWikiDashboardPlugin extends Plugin {
       defaultModuleVisibility(),
       this.settings.moduleVisibility ?? {}
     );
+    // Merge moduleDeviceVisibility with defaults
+    this.settings.moduleDeviceVisibility = Object.assign(
+      {},
+      DEFAULT_SETTINGS.moduleDeviceVisibility,
+      this.settings.moduleDeviceVisibility ?? {}
+    );
   }
 
   async saveSettings(settings?: DashboardSettings) {

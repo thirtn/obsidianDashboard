@@ -1,7 +1,7 @@
 # yyObsidianDashboard
 
 一个 Obsidian 仪表盘插件，为 LLM 驱动的知识库管理提供一站式工作面板。
-.claude/plans/valiant-noodling-frog.md
+
 ## 功能模块
 
 ### 文件统计

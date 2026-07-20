@@ -40,6 +40,8 @@
 }
 
 .dashboard-heatmap-config-btn {
+  -webkit-appearance: none;
+  appearance: none;
   background: none;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);

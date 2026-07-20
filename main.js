@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => LLMWikiDashboardPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian27 = require("obsidian");
+var import_obsidian29 = require("obsidian");
 
 // src/modules/heatmap/types.ts
 var REPORT_LABELS = {
@@ -51,7 +51,8 @@ var MODULE_IDS = [
   "git-sync",
   "remotely-save",
   "task-quickadd",
-  "plugin-manage"
+  "plugin-manage",
+  "voice-transcription"
 ];
 var MODULE_LABELS = {
   "file-stats": "\u6587\u4EF6\u7EDF\u8BA1",
@@ -61,10 +62,13 @@ var MODULE_LABELS = {
   "git-sync": "Git \u540C\u6B65",
   "remotely-save": "\u4E91\u540C\u6B65\u8BB0\u5F55",
   "task-quickadd": "\u5FEB\u901F\u6DFB\u52A0\u4EFB\u52A1",
-  "plugin-manage": "\u63D2\u4EF6\u7BA1\u7406"
+  "plugin-manage": "\u63D2\u4EF6\u7BA1\u7406",
+  "voice-transcription": "\u8BED\u97F3\u8F6C\u6587\u5B57"
 };
 function defaultModuleVisibility() {
-  return Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
+  const all = Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
+  all["voice-transcription"] = false;
+  return all;
 }
 var defaultReportConfigs = {
   daily: { enabled: true, confirmBeforeCreate: true, directory: "raw/dayReport", filenameFormat: "YYYY/MM/YYYY-MM-DD", templatePath: "raw/dayReport/template" },
@@ -110,13 +114,26 @@ var DEFAULT_SETTINGS = {
     "plugin-manage"
   ],
   moduleVisibility: defaultModuleVisibility(),
+  moduleDeviceVisibility: {
+    "file-stats": "both",
+    "heatmap": "both",
+    "llm-command": "both",
+    "operation-log": "both",
+    "git-sync": "desktop",
+    "remotely-save": "both",
+    "task-quickadd": "both",
+    "plugin-manage": "desktop",
+    "voice-transcription": "both"
+  },
   openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
-  tokenUsageDataPath: ".dashboard/token-usage.json"
+  tokenUsageDataPath: ".dashboard/token-usage.json",
+  whisperModelName: "whisper-1",
+  whisperApiBaseUrl: ""
 };
 
 // src/ui/DashboardView.ts
-var import_obsidian22 = require("obsidian");
+var import_obsidian24 = require("obsidian");
 
 // src/services/FileService.ts
 var import_obsidian = require("obsidian");
@@ -4729,9 +4746,368 @@ var PluginManageComponent = class extends BaseComponent {
   }
 };
 
+// src/modules/voice-transcription/VoiceTranscriptionComponent.ts
+var import_obsidian23 = require("obsidian");
+
+// src/modules/voice-transcription/VoiceTranscriptionService.ts
+var VoiceTranscriptionService = class {
+  constructor() {
+    this.mediaRecorder = null;
+    this.chunks = [];
+    this.stream = null;
+  }
+  async startRecording() {
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.chunks = [];
+    this.mediaRecorder = new MediaRecorder(this.stream, {
+      mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm"
+    });
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0)
+        this.chunks.push(e.data);
+    };
+    this.mediaRecorder.start();
+  }
+  stopRecording() {
+    return new Promise((resolve) => {
+      if (!this.mediaRecorder) {
+        resolve(new Blob());
+        return;
+      }
+      this.mediaRecorder.onstop = () => {
+        var _a;
+        (_a = this.stream) == null ? void 0 : _a.getTracks().forEach((t) => t.stop());
+        this.stream = null;
+        const blob = new Blob(this.chunks, { type: "audio/webm" });
+        resolve(blob);
+      };
+      this.mediaRecorder.stop();
+    });
+  }
+  cancelRecording() {
+    var _a;
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      this.mediaRecorder.stop();
+    }
+    (_a = this.stream) == null ? void 0 : _a.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.chunks = [];
+    this.mediaRecorder = null;
+  }
+  async transcribe(audioBlob, apiBaseUrl, apiKey, model) {
+    var _a;
+    const formData = new FormData();
+    formData.append("file", audioBlob, "recording.webm");
+    formData.append("model", model);
+    const response = await fetch(`${apiBaseUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData
+    });
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error(
+          "\u5F53\u524D API \u670D\u52A1\u5546\u4E0D\u652F\u6301 Whisper \u8BED\u97F3\u8F6C\u5199\uFF08404\uFF09\u3002\n\u8BF7\u4F7F\u7528 OpenAI \u6216\u517C\u5BB9 Whisper \u7684 API \u5730\u5740"
+        );
+      }
+      const err = await response.json().catch(() => ({
+        error: { message: response.statusText }
+      }));
+      throw new Error(
+        ((_a = err.error) == null ? void 0 : _a.message) || `Whisper API error: ${response.status}`
+      );
+    }
+    const data = await response.json();
+    return data.text || "";
+  }
+};
+
+// src/modules/voice-transcription/VoiceConfigModal.ts
+var import_obsidian22 = require("obsidian");
+var DEFAULT_WHISPER_MODEL = "whisper-1";
+var VoiceConfigModal = class extends import_obsidian22.Modal {
+  constructor(app, settings, onSave) {
+    super(app);
+    this.onSave = onSave;
+    this.settings = JSON.parse(JSON.stringify(settings));
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("dashboard-modal");
+    contentEl.createEl("h2", { text: "\u8BED\u97F3\u8F6C\u6587\u5B57\u914D\u7F6E" });
+    this.createTextField(
+      contentEl,
+      "Whisper API \u5730\u5740",
+      "whisperApiBaseUrl",
+      "text",
+      "https://api.openai.com/v1"
+    );
+    this.createTextField(
+      contentEl,
+      "Whisper \u6A21\u578B\u540D\u79F0",
+      "whisperModelName",
+      "text",
+      DEFAULT_WHISPER_MODEL
+    );
+    contentEl.createDiv({
+      text: "\u7559\u7A7A\u5219\u4F7F\u7528 Dashboard \u8BBE\u7F6E\u7684 API Base URL\u3002\u5982\u679C\u670D\u52A1\u5546\u4E0D\u652F\u6301 Whisper\uFF08\u5982 DeepSeek\uFF09\uFF0C\u8BF7\u586B\u5165 OpenAI \u7684\u5730\u5740\u3002",
+      cls: "dashboard-field-hint"
+    });
+    const actions = contentEl.createDiv("dashboard-modal-actions");
+    actions.style.cssText = "justify-content:flex-end;";
+    actions.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+    const saveBtn = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
+    saveBtn.addEventListener("click", async () => {
+      await this.onSave(this.settings);
+      this.close();
+      new import_obsidian22.Notice("\u8BED\u97F3\u8F6C\u6587\u5B57\u914D\u7F6E\u5DF2\u4FDD\u5B58");
+    });
+  }
+  createTextField(parent, label, key, type, placeholder) {
+    var _a;
+    const row = parent.createDiv("dashboard-field");
+    row.createEl("label", { text: label });
+    const inputWrap = row.createDiv("dashboard-input-wrap");
+    const input = inputWrap.createEl("input");
+    input.type = type;
+    input.placeholder = placeholder;
+    input.value = String((_a = this.settings[key]) != null ? _a : "");
+    input.addEventListener("input", () => {
+      this.settings[key] = input.value;
+    });
+    const hint = inputWrap.createEl("span", {
+      cls: "dashboard-example-hint",
+      text: "\u{1F4CB}",
+      attr: { "data-tooltip": placeholder }
+    });
+    hint.addEventListener("click", () => {
+      input.value = placeholder;
+      input.dispatchEvent(new Event("input"));
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+
+// src/modules/voice-transcription/VoiceTranscriptionComponent.ts
+var VoiceTranscriptionComponent = class extends BaseComponent {
+  constructor(app, settings, onSettingsChange) {
+    super(app, settings);
+    this.modEl = null;
+    this.timerInterval = null;
+    this.state = "idle";
+    this.recordingSeconds = 0;
+    this.errorText = "";
+    this.resultText = "";
+    this.service = new VoiceTranscriptionService();
+    this.onSettingsChange = onSettingsChange;
+  }
+  get id() {
+    return "voice-transcription";
+  }
+  async render(container) {
+    const mod = container.createDiv("dashboard-module");
+    mod.id = "dashboard-voice-module";
+    this.modEl = mod;
+    this.buildHeader(mod);
+    const body = mod.createDiv("dashboard-module-body");
+    body.addClass("dashboard-voice-body");
+    await this.buildBodyContent(body);
+  }
+  async update() {
+    const mod = this.modEl;
+    if (!mod || !mod.isConnected)
+      return;
+    const existingBody = mod.querySelector(".dashboard-module-body");
+    if (existingBody)
+      existingBody.remove();
+    const body = mod.createDiv("dashboard-module-body");
+    body.addClass("dashboard-voice-body");
+    await this.buildBodyContent(body);
+  }
+  destroy() {
+    this.stopTimer();
+    this.service.cancelRecording();
+    super.destroy();
+  }
+  // ── Internal ──
+  buildHeader(mod) {
+    const header = mod.createDiv("dashboard-module-header");
+    const titleWrap = header.createDiv("dashboard-module-title-wrap");
+    titleWrap.createEl("span", { text: "\u{1F3A4}", cls: "dashboard-module-icon" });
+    titleWrap.createEl("span", { text: "\u8BED\u97F3\u8F6C\u6587\u5B57", cls: "dashboard-module-title" });
+    const gearBtn = header.createEl("button", {
+      cls: "dashboard-heatmap-config-btn",
+      title: "\u8BED\u97F3\u8F6C\u6587\u5B57\u914D\u7F6E"
+    });
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => {
+      new VoiceConfigModal(
+        this.app,
+        this.settings,
+        async (s) => {
+          await this.onSettingsChange(s);
+          this.settings = s;
+        }
+      ).open();
+    });
+  }
+  async buildBodyContent(body) {
+    var _a;
+    if (import_obsidian23.Platform.isMobile) {
+      body.createDiv({
+        text: "\u8BED\u97F3\u8F6C\u6587\u5B57\u4EC5\u5728\u684C\u9762\u7AEF\u53EF\u7528\uFF0C\u8BF7\u4F7F\u7528\u684C\u9762\u7AEF Obsidian\u3002",
+        cls: "dashboard-voice-hint"
+      });
+      return;
+    }
+    if (!((_a = navigator.mediaDevices) == null ? void 0 : _a.getUserMedia)) {
+      body.createDiv({
+        text: "\u5F53\u524D\u73AF\u5883\u4E0D\u652F\u6301\u9EA6\u514B\u98CE\u5F55\u97F3\u3002\u8BF7\u5728\u684C\u9762\u7AEF Obsidian \u4E2D\u4F7F\u7528\u6B64\u529F\u80FD\u3002",
+        cls: "dashboard-voice-hint"
+      });
+      return;
+    }
+    const content = body.createDiv("dashboard-voice-content");
+    const btnWrap = content.createDiv("dashboard-voice-btn-wrap");
+    const timerEl = content.createDiv("dashboard-voice-timer");
+    const statusEl = content.createDiv("dashboard-voice-status");
+    const resultWrap = content.createDiv("dashboard-voice-result-wrap");
+    this.buildStateUI(btnWrap, timerEl, statusEl, resultWrap);
+  }
+  buildStateUI(btnWrap, timerEl, statusEl, resultWrap) {
+    btnWrap.empty();
+    const recordBtn = btnWrap.createEl("button", {
+      cls: "dashboard-voice-record-btn"
+    });
+    timerEl.empty();
+    statusEl.empty();
+    resultWrap.empty();
+    if (this.state === "idle") {
+      recordBtn.textContent = "\u25CF \u5F00\u59CB\u5F55\u97F3";
+      recordBtn.addEventListener("click", () => this.handleStart(btnWrap, timerEl, statusEl, resultWrap));
+    } else if (this.state === "recording") {
+      recordBtn.textContent = "\u25A0 \u505C\u6B62\u5F55\u97F3";
+      recordBtn.addClass("recording");
+      recordBtn.addEventListener("click", () => this.handleStop(btnWrap, timerEl, statusEl, resultWrap));
+      timerEl.textContent = this.formatSeconds(this.recordingSeconds);
+      this.startTimer(timerEl);
+    } else if (this.state === "transcribing") {
+      recordBtn.textContent = "\u25CF \u5F00\u59CB\u5F55\u97F3";
+      recordBtn.disabled = true;
+      statusEl.createDiv({ text: "\u8F6C\u5199\u4E2D...", cls: "dashboard-voice-transcribing" });
+      const spinner = statusEl.createDiv("dashboard-voice-spinner");
+      spinner.style.cssText = "width:24px;height:24px;border:3px solid var(--background-modifier-border);border-top-color:var(--interactive-accent);border-radius:50%;margin-top:8px;animation:dashboard-voice-spin 0.8s linear infinite;";
+    } else if (this.state === "done") {
+      recordBtn.textContent = "\u25CF \u5F00\u59CB\u5F55\u97F3";
+      recordBtn.addEventListener("click", () => this.handleStart(btnWrap, timerEl, statusEl, resultWrap));
+      if (this.resultText) {
+        const textarea = resultWrap.createEl("textarea", {
+          cls: "dashboard-voice-result",
+          attr: { readonly: "true" }
+        });
+        textarea.value = this.resultText;
+        const actions = resultWrap.createDiv("dashboard-voice-actions");
+        const insertBtn = actions.createEl("button", {
+          text: "\u63D2\u5165\u5230\u7F16\u8F91\u5668",
+          cls: "mod-cta"
+        });
+        insertBtn.addEventListener("click", () => this.insertToEditor());
+        const copyBtn = actions.createEl("button", {
+          text: "\u590D\u5236"
+        });
+        copyBtn.addEventListener("click", () => this.copyToClipboard());
+      }
+    }
+    if (this.errorText) {
+      statusEl.createDiv({ text: this.errorText, cls: "dashboard-voice-error" });
+    }
+  }
+  // ── Handlers ──
+  async handleStart(btnWrap, timerEl, statusEl, resultWrap) {
+    this.errorText = "";
+    this.resultText = "";
+    this.recordingSeconds = 0;
+    try {
+      await this.service.startRecording();
+      this.state = "recording";
+      this.buildStateUI(btnWrap, timerEl, statusEl, resultWrap);
+    } catch (e) {
+      if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+        this.errorText = "\u9EA6\u514B\u98CE\u6743\u9650\u88AB\u62D2\u7EDD\uFF0C\u8BF7\u5728\u7CFB\u7EDF\u8BBE\u7F6E\u4E2D\u5141\u8BB8 Obsidian \u8BBF\u95EE\u9EA6\u514B\u98CE\u3002";
+      } else {
+        this.errorText = `\u65E0\u6CD5\u5F00\u59CB\u5F55\u97F3: ${e.message}`;
+      }
+      this.state = "idle";
+      this.buildStateUI(btnWrap, timerEl, statusEl, resultWrap);
+    }
+  }
+  async handleStop(btnWrap, timerEl, statusEl, resultWrap) {
+    this.stopTimer();
+    this.state = "transcribing";
+    this.buildStateUI(btnWrap, timerEl, statusEl, resultWrap);
+    try {
+      const blob = await this.service.stopRecording();
+      const model = this.settings.whisperModelName || "whisper-1";
+      const apiUrl = this.settings.whisperApiBaseUrl || this.settings.apiBaseUrl;
+      const text = await this.service.transcribe(
+        blob,
+        apiUrl,
+        this.settings.apiKey,
+        model
+      );
+      this.resultText = text;
+      this.state = "done";
+    } catch (e) {
+      this.errorText = `\u8F6C\u5199\u5931\u8D25: ${e.message}`;
+      this.state = "idle";
+    }
+    this.buildStateUI(btnWrap, timerEl, statusEl, resultWrap);
+  }
+  insertToEditor() {
+    var _a;
+    const editor = (_a = this.app.workspace.activeEditor) == null ? void 0 : _a.editor;
+    if (editor) {
+      editor.replaceSelection(this.resultText);
+      new import_obsidian23.Notice("\u5DF2\u63D2\u5165\u5230\u7F16\u8F91\u5668");
+    } else {
+      new import_obsidian23.Notice("\u6CA1\u6709\u6253\u5F00\u7684\u7F16\u8F91\u5668");
+    }
+  }
+  async copyToClipboard() {
+    try {
+      await navigator.clipboard.writeText(this.resultText);
+      new import_obsidian23.Notice("\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+    } catch (e) {
+      new import_obsidian23.Notice("\u590D\u5236\u5931\u8D25");
+    }
+  }
+  // ── Timer ──
+  startTimer(displayEl) {
+    this.stopTimer();
+    this.timerInterval = setInterval(() => {
+      this.recordingSeconds++;
+      displayEl.textContent = this.formatSeconds(this.recordingSeconds);
+    }, 1e3);
+  }
+  stopTimer() {
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = null;
+    }
+  }
+  formatSeconds(total) {
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+};
+
 // src/ui/DashboardView.ts
 var DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
-var DashboardView = class extends import_obsidian22.ItemView {
+var DashboardView = class extends import_obsidian24.ItemView {
   constructor(leaf, settings, onSettingsChange) {
     super(leaf);
     // Component map by ID (for moduleOrder lookup)
@@ -4810,6 +5186,14 @@ var DashboardView = class extends import_obsidian22.ItemView {
       }
     );
     this.pluginManageComponent = new PluginManageComponent(this.app, settings);
+    this.voiceTranscriptionComponent = new VoiceTranscriptionComponent(
+      this.app,
+      settings,
+      async (s) => {
+        await this.onSettingsChange(s);
+        this.updateSettings(s);
+      }
+    );
     this.components = {
       "header": this.headerComponent,
       "search": this.searchComponent,
@@ -4821,7 +5205,8 @@ var DashboardView = class extends import_obsidian22.ItemView {
       "git-sync": this.gitSyncComponent,
       "remotely-save": this.remotelySaveComponent,
       "task-quickadd": this.taskQuickAddComponent,
-      "plugin-manage": this.pluginManageComponent
+      "plugin-manage": this.pluginManageComponent,
+      "voice-transcription": this.voiceTranscriptionComponent
     };
   }
   getViewType() {
@@ -4968,9 +5353,16 @@ var DashboardView = class extends import_obsidian22.ItemView {
       const scroll = offscreen.createDiv("dashboard-scroll");
       const order = this.settings.moduleOrder || [];
       const visibility = this.settings.moduleVisibility || {};
+      const deviceVisibility = this.settings.moduleDeviceVisibility || {};
+      const isPhone = import_obsidian24.Platform.isPhone;
       const visibleOrder = [];
       for (const moduleId of order) {
         if (visibility[moduleId] === false)
+          continue;
+        const device = deviceVisibility[moduleId] || "both";
+        if (device === "desktop" && isPhone)
+          continue;
+        if (device === "mobile" && !isPhone)
           continue;
         const comp = this.components[moduleId];
         if (!comp)
@@ -5059,7 +5451,7 @@ var DashboardView = class extends import_obsidian22.ItemView {
 };
 
 // src/modules/llm-command/settings.ts
-var import_obsidian23 = require("obsidian");
+var import_obsidian25 = require("obsidian");
 function addExampleHint(setting, example) {
   const input = setting.controlEl.querySelector("input");
   if (!input)
@@ -5073,34 +5465,34 @@ function addExampleHint(setting, example) {
 }
 function renderLLMSettings(containerEl, ctx) {
   containerEl.createEl("h3", { text: "\u6A21\u578B\u914D\u7F6E" });
-  const s1 = new import_obsidian23.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
+  const s1 = new import_obsidian25.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
     (text) => text.setPlaceholder("https://api.openai.com/v1").setValue(ctx.settings.apiBaseUrl).onChange(async (value) => {
       ctx.settings.apiBaseUrl = value;
       await ctx.saveSettings();
     })
   );
   addExampleHint(s1, "https://api.openai.com/v1");
-  new import_obsidian23.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u82E5\u542F\u7528 Git \u540C\u6B65\u8BF7\u786E\u8BA4\u5DF2\u5FFD\u7565\u8BE5\u6587\u4EF6").addText((text) => {
+  new import_obsidian25.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u82E5\u542F\u7528 Git \u540C\u6B65\u8BF7\u786E\u8BA4\u5DF2\u5FFD\u7565\u8BE5\u6587\u4EF6").addText((text) => {
     text.setPlaceholder("sk-...").setValue(ctx.settings.apiKey).onChange(async (value) => {
       ctx.settings.apiKey = value;
       await ctx.saveSettings();
     });
     text.inputEl.type = "password";
   });
-  const s2 = new import_obsidian23.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
+  const s2 = new import_obsidian25.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
     (text) => text.setPlaceholder("gpt-4o").setValue(ctx.settings.modelName).onChange(async (value) => {
       ctx.settings.modelName = value;
       await ctx.saveSettings();
     })
   );
   addExampleHint(s2, "gpt-4o");
-  new import_obsidian23.Setting(containerEl).setName("Temperature").addSlider(
+  new import_obsidian25.Setting(containerEl).setName("Temperature").addSlider(
     (slider) => slider.setLimits(0, 2, 0.1).setValue(ctx.settings.temperature).setDynamicTooltip().onChange(async (value) => {
       ctx.settings.temperature = value;
       await ctx.saveSettings();
     })
   );
-  new import_obsidian23.Setting(containerEl).setName("Max Tokens").addText(
+  new import_obsidian25.Setting(containerEl).setName("Max Tokens").addText(
     (text) => text.setValue(String(ctx.settings.maxTokens)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n)) {
@@ -5109,13 +5501,13 @@ function renderLLMSettings(containerEl, ctx) {
       }
     })
   );
-  new import_obsidian23.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
+  new import_obsidian25.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
     (text) => text.setPlaceholder("https://...").setValue(ctx.settings.tokenUsageApiUrl).onChange(async (value) => {
       ctx.settings.tokenUsageApiUrl = value;
       await ctx.saveSettings();
     })
   );
-  const s3 = new import_obsidian23.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
+  const s3 = new import_obsidian25.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
     (text) => text.setPlaceholder("https://...").setValue(ctx.settings.tokenBalanceApiUrl).onChange(async (value) => {
       ctx.settings.tokenBalanceApiUrl = value;
       await ctx.saveSettings();
@@ -5125,10 +5517,10 @@ function renderLLMSettings(containerEl, ctx) {
 }
 
 // src/modules/file-stats/settings.ts
-var import_obsidian24 = require("obsidian");
+var import_obsidian26 = require("obsidian");
 function renderFileStatsSettings(containerEl, ctx) {
   containerEl.createEl("h3", { text: "\u6587\u4EF6\u7EDF\u8BA1" });
-  new import_obsidian24.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
+  new import_obsidian26.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
     (text) => text.setValue(ctx.settings.trackedFolders.join(", ")).onChange(async (value) => {
       ctx.settings.trackedFolders = value.split(",").map((s) => s.trim()).filter(Boolean);
       await ctx.saveSettings();
@@ -5137,7 +5529,7 @@ function renderFileStatsSettings(containerEl, ctx) {
 }
 
 // src/modules/heatmap/settings.ts
-var import_obsidian25 = require("obsidian");
+var import_obsidian27 = require("obsidian");
 var reportLabels = {
   daily: "\u65E5\u62A5",
   weekly: "\u5468\u62A5",
@@ -5150,31 +5542,31 @@ function renderReportSettings(containerEl, ctx) {
   for (const type of Object.keys(reportLabels)) {
     const cfg = ctx.settings.reportConfigs[type];
     containerEl.createEl("h4", { text: reportLabels[type] });
-    new import_obsidian25.Setting(containerEl).setName("\u542F\u7528").addToggle(
+    new import_obsidian27.Setting(containerEl).setName("\u542F\u7528").addToggle(
       (toggle) => toggle.setValue(cfg.enabled).onChange(async (value) => {
         cfg.enabled = value;
         await ctx.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
+    new import_obsidian27.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
       (toggle) => toggle.setValue(cfg.confirmBeforeCreate).onChange(async (value) => {
         cfg.confirmBeforeCreate = value;
         await ctx.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
+    new import_obsidian27.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
       (text) => text.setValue(cfg.directory).onChange(async (value) => {
         cfg.directory = value.trim();
         await ctx.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc("\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD").addText(
+    new import_obsidian27.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc("\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD").addText(
       (text) => text.setValue(cfg.filenameFormat).onChange(async (value) => {
         cfg.filenameFormat = value.trim();
         await ctx.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
+    new import_obsidian27.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
       (text) => text.setValue(cfg.templatePath).onChange(async (value) => {
         cfg.templatePath = value.trim();
         await ctx.saveSettings();
@@ -5184,7 +5576,7 @@ function renderReportSettings(containerEl, ctx) {
 }
 
 // src/modules/git-sync/settings.ts
-var import_obsidian26 = require("obsidian");
+var import_obsidian28 = require("obsidian");
 function addExampleHint2(setting, example) {
   const input = setting.controlEl.querySelector("input");
   if (!input)
@@ -5215,54 +5607,54 @@ function addCommitPreview(setting) {
 }
 function renderGitSettings(containerEl, ctx) {
   containerEl.createEl("h3", { text: "Git \u540C\u6B65 (GitHub)" });
-  new import_obsidian26.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
+  new import_obsidian28.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
     (toggle) => toggle.setValue(ctx.settings.gitEnabled).onChange(async (value) => {
       ctx.settings.gitEnabled = value;
       await ctx.saveSettings();
     })
   );
-  const s1 = new import_obsidian26.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
+  const s1 = new import_obsidian28.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
     (text) => text.setPlaceholder("https://github.com/username/repo.git").setValue(ctx.settings.gitRemoteURL).onChange(async (value) => {
       ctx.settings.gitRemoteURL = value.trim();
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s1, "https://github.com/username/repo.git");
-  const s2 = new import_obsidian26.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
+  const s2 = new import_obsidian28.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
     (text) => text.setPlaceholder("origin").setValue(ctx.settings.gitRemoteName).onChange(async (value) => {
       ctx.settings.gitRemoteName = value.trim() || "origin";
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s2, "origin");
-  const s3 = new import_obsidian26.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
+  const s3 = new import_obsidian28.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
     (text) => text.setPlaceholder("main").setValue(ctx.settings.gitBranchName).onChange(async (value) => {
       ctx.settings.gitBranchName = value.trim() || "main";
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s3, "main");
-  const s4 = new import_obsidian26.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
+  const s4 = new import_obsidian28.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
     (text) => text.setPlaceholder("your-username").setValue(ctx.settings.gitUsername).onChange(async (value) => {
       ctx.settings.gitUsername = value.trim();
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s4, "your-username");
-  new import_obsidian26.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u8BF7\u52A1\u5FC5\u5C06\u8BE5\u6587\u4EF6\u52A0\u5165 .gitignore").addText((text) => {
+  new import_obsidian28.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u8BF7\u52A1\u5FC5\u5C06\u8BE5\u6587\u4EF6\u52A0\u5165 .gitignore").addText((text) => {
     text.setPlaceholder("your-token").setValue(ctx.settings.gitPassword).onChange(async (value) => {
       ctx.settings.gitPassword = value.trim();
       await ctx.saveSettings();
     });
     text.inputEl.type = "password";
   });
-  new import_obsidian26.Setting(containerEl).setName("\u81EA\u52A8 Push").setDesc("\u5F00\u542F\u540E\u6309\u8BBE\u5B9A\u7684\u65F6\u95F4\u95F4\u9694\u81EA\u52A8 push").addToggle(
+  new import_obsidian28.Setting(containerEl).setName("\u81EA\u52A8 Push").setDesc("\u5F00\u542F\u540E\u6309\u8BBE\u5B9A\u7684\u65F6\u95F4\u95F4\u9694\u81EA\u52A8 push").addToggle(
     (toggle) => toggle.setValue(ctx.settings.gitAutoPushEnabled).onChange(async (value) => {
       ctx.settings.gitAutoPushEnabled = value;
       await ctx.saveSettings();
     })
   );
-  const s5 = new import_obsidian26.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
+  const s5 = new import_obsidian28.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
     (text) => text.setPlaceholder("30").setValue(String(ctx.settings.gitAutoPushInterval)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n) && n >= 0) {
@@ -5272,7 +5664,7 @@ function renderGitSettings(containerEl, ctx) {
     })
   );
   addExampleHint2(s5, "30");
-  const sPoll = new import_obsidian26.Setting(containerEl).setName("Git \u72B6\u6001\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("Dashboard \u4E2D Git \u6A21\u5757\u81EA\u52A8\u5237\u65B0 status \u7684\u95F4\u9694\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u8F6E\u8BE2\uFF08\u4ECD\u4F1A\u5728 vault \u53D8\u66F4\u65F6\u5237\u65B0\uFF09").addText(
+  const sPoll = new import_obsidian28.Setting(containerEl).setName("Git \u72B6\u6001\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("Dashboard \u4E2D Git \u6A21\u5757\u81EA\u52A8\u5237\u65B0 status \u7684\u95F4\u9694\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u8F6E\u8BE2\uFF08\u4ECD\u4F1A\u5728 vault \u53D8\u66F4\u65F6\u5237\u65B0\uFF09").addText(
     (text) => text.setPlaceholder("30").setValue(String(ctx.settings.gitPollInterval)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n) && n >= 0) {
@@ -5282,7 +5674,7 @@ function renderGitSettings(containerEl, ctx) {
     })
   );
   addExampleHint2(sPoll, "30");
-  const sTimeout = new import_obsidian26.Setting(containerEl).setName("Push/Pull \u8D85\u65F6\uFF08\u5206\u949F\uFF09").setDesc("\u7F51\u7EDC\u4F20\u8F93\u8D85\u65F6\u65F6\u95F4\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u9650\u65F6\uFF1B\u5927\u4ED3\u5E93\u9996\u6B21\u63A8\u9001\u5EFA\u8BAE\u8BBE 10 \u6216\u66F4\u5927").addText(
+  const sTimeout = new import_obsidian28.Setting(containerEl).setName("Push/Pull \u8D85\u65F6\uFF08\u5206\u949F\uFF09").setDesc("\u7F51\u7EDC\u4F20\u8F93\u8D85\u65F6\u65F6\u95F4\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u9650\u65F6\uFF1B\u5927\u4ED3\u5E93\u9996\u6B21\u63A8\u9001\u5EFA\u8BAE\u8BBE 10 \u6216\u66F4\u5927").addText(
     (text) => text.setPlaceholder("5").setValue(String(ctx.settings.gitPushTimeout)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n) && n >= 0) {
@@ -5292,7 +5684,7 @@ function renderGitSettings(containerEl, ctx) {
     })
   );
   addExampleHint2(sTimeout, "5");
-  const s6 = new import_obsidian26.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
+  const s6 = new import_obsidian28.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
     (text) => text.setPlaceholder("auto: {{date}} {{time}}").setValue(ctx.settings.gitCommitTemplate).onChange(async (value) => {
       ctx.settings.gitCommitTemplate = value.trim();
       await ctx.saveSettings();
@@ -5303,7 +5695,7 @@ function renderGitSettings(containerEl, ctx) {
 }
 
 // src/main.ts
-var LLMWikiDashboardPlugin = class extends import_obsidian27.Plugin {
+var LLMWikiDashboardPlugin = class extends import_obsidian29.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(
@@ -5338,7 +5730,7 @@ var LLMWikiDashboardPlugin = class extends import_obsidian27.Plugin {
     workspace.revealLeaf(leaf);
   }
   async loadSettings() {
-    var _a;
+    var _a, _b;
     const saved = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     if (saved == null ? void 0 : saved.reportConfigs) {
@@ -5363,6 +5755,11 @@ var LLMWikiDashboardPlugin = class extends import_obsidian27.Plugin {
       defaultModuleVisibility(),
       (_a = this.settings.moduleVisibility) != null ? _a : {}
     );
+    this.settings.moduleDeviceVisibility = Object.assign(
+      {},
+      DEFAULT_SETTINGS.moduleDeviceVisibility,
+      (_b = this.settings.moduleDeviceVisibility) != null ? _b : {}
+    );
   }
   async saveSettings(settings) {
     if (settings)
@@ -5376,7 +5773,7 @@ var LLMWikiDashboardPlugin = class extends import_obsidian27.Plugin {
     });
   }
 };
-var DashboardSettingTab = class extends import_obsidian27.PluginSettingTab {
+var DashboardSettingTab = class extends import_obsidian29.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -5389,21 +5786,21 @@ var DashboardSettingTab = class extends import_obsidian27.PluginSettingTab {
       settings: this.plugin.settings,
       saveSettings: () => this.plugin.saveSettings()
     };
-    const s1 = new import_obsidian27.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
+    const s1 = new import_obsidian29.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
       (text) => text.setPlaceholder("Dashboard").setValue(this.plugin.settings.dashboardTitle).onChange(async (value) => {
         this.plugin.settings.dashboardTitle = value.trim() || "Dashboard";
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(s1, "Dashboard");
-    const s2 = new import_obsidian27.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
+    const s2 = new import_obsidian29.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
       (text) => text.setPlaceholder("\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F").setValue(this.plugin.settings.dashboardDesc).onChange(async (value) => {
         this.plugin.settings.dashboardDesc = value.trim();
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(s2, "\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F");
-    new import_obsidian27.Setting(containerEl).setName("\u542F\u52A8\u65F6\u81EA\u52A8\u6253\u5F00 Dashboard").setDesc("Obsidian \u542F\u52A8\u3001\u5E03\u5C40\u5C31\u7EEA\u540E\u81EA\u52A8\u6253\u5F00 Dashboard \u9762\u677F").addToggle(
+    new import_obsidian29.Setting(containerEl).setName("\u542F\u52A8\u65F6\u81EA\u52A8\u6253\u5F00 Dashboard").setDesc("Obsidian \u542F\u52A8\u3001\u5E03\u5C40\u5C31\u7EEA\u540E\u81EA\u52A8\u6253\u5F00 Dashboard \u9762\u677F").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.openOnStartup).onChange(async (value) => {
         this.plugin.settings.openOnStartup = value;
         await this.plugin.saveSettings();
@@ -5415,7 +5812,7 @@ var DashboardSettingTab = class extends import_obsidian27.PluginSettingTab {
       cls: "dashboard-field-hint"
     });
     for (const mid of MODULE_IDS) {
-      new import_obsidian27.Setting(containerEl).setName(MODULE_LABELS[mid]).addToggle(
+      new import_obsidian29.Setting(containerEl).setName(MODULE_LABELS[mid]).addToggle(
         (toggle) => {
           var _a;
           return toggle.setValue(((_a = this.plugin.settings.moduleVisibility) == null ? void 0 : _a[mid]) !== false).onChange(async (value) => {

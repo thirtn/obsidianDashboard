@@ -1,0 +1,114 @@
+/* ─── Voice Transcription ────────────────────────────────────────────────── */
+
+.dashboard-voice-body {
+  min-height: 60px;
+}
+
+.dashboard-voice-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.dashboard-voice-btn-wrap {
+  margin-bottom: 6px;
+}
+
+.dashboard-voice-record-btn {
+  padding: 10px 36px;
+  border-radius: 24px;
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+  cursor: pointer;
+  border: 2px solid var(--interactive-accent);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  transition: all 0.2s;
+  min-width: 160px;
+}
+
+.dashboard-voice-record-btn:hover {
+  opacity: 0.85;
+}
+
+.dashboard-voice-record-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dashboard-voice-record-btn.recording {
+  background: transparent;
+  color: var(--text-error);
+  border-color: var(--text-error);
+  animation: dashboard-voice-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes dashboard-voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(231, 76, 60, 0); }
+}
+
+.dashboard-voice-timer {
+  font-size: 2em;
+  font-family: var(--font-monospace);
+  font-weight: 700;
+  color: var(--text-error);
+  min-height: 44px;
+  line-height: 44px;
+  margin-bottom: 4px;
+}
+
+.dashboard-voice-status {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.dashboard-voice-transcribing {
+  font-size: var(--font-ui-medium);
+  color: var(--text-muted);
+}
+
+.dashboard-voice-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+  margin-top: 8px;
+  max-width: 300px;
+}
+
+.dashboard-voice-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+  padding: 8px 0;
+}
+
+.dashboard-voice-result-wrap {
+  width: 100%;
+}
+
+.dashboard-voice-result {
+  width: 100%;
+  min-height: 80px;
+  max-height: 200px;
+  resize: vertical;
+  font-family: var(--font-text);
+  font-size: var(--font-ui-small);
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+
+.dashboard-voice-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+@keyframes dashboard-voice-spin {
+  to { transform: rotate(360deg); }
+}
