@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => LLMWikiDashboardPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian29 = require("obsidian");
+var import_obsidian31 = require("obsidian");
 
 // src/modules/heatmap/types.ts
 var REPORT_LABELS = {
@@ -52,7 +52,8 @@ var MODULE_IDS = [
   "remotely-save",
   "task-quickadd",
   "plugin-manage",
-  "voice-transcription"
+  "voice-transcription",
+  "large-files"
 ];
 var MODULE_LABELS = {
   "file-stats": "\u6587\u4EF6\u7EDF\u8BA1",
@@ -63,7 +64,8 @@ var MODULE_LABELS = {
   "remotely-save": "\u4E91\u540C\u6B65\u8BB0\u5F55",
   "task-quickadd": "\u5FEB\u901F\u6DFB\u52A0\u4EFB\u52A1",
   "plugin-manage": "\u63D2\u4EF6\u7BA1\u7406",
-  "voice-transcription": "\u8BED\u97F3\u8F6C\u6587\u5B57"
+  "voice-transcription": "\u8BED\u97F3\u8F6C\u6587\u5B57",
+  "large-files": "\u5927\u6587\u4EF6"
 };
 function defaultModuleVisibility() {
   const all = Object.fromEntries(MODULE_IDS.map((id) => [id, true]));
@@ -111,7 +113,8 @@ var DEFAULT_SETTINGS = {
     "git-sync",
     "remotely-save",
     "task-quickadd",
-    "plugin-manage"
+    "plugin-manage",
+    "large-files"
   ],
   moduleVisibility: defaultModuleVisibility(),
   moduleDeviceVisibility: {
@@ -123,17 +126,20 @@ var DEFAULT_SETTINGS = {
     "remotely-save": "both",
     "task-quickadd": "both",
     "plugin-manage": "desktop",
-    "voice-transcription": "both"
+    "voice-transcription": "both",
+    "large-files": "desktop"
   },
   openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
   tokenUsageDataPath: ".dashboard/token-usage.json",
   whisperModelName: "whisper-1",
-  whisperApiBaseUrl: ""
+  whisperApiBaseUrl: "",
+  largeFilesMinSizeKB: 0,
+  largeFilesMaxCount: 20
 };
 
 // src/ui/DashboardView.ts
-var import_obsidian24 = require("obsidian");
+var import_obsidian26 = require("obsidian");
 
 // src/services/FileService.ts
 var import_obsidian = require("obsidian");
@@ -257,7 +263,7 @@ var FileService = class {
     return { path: f.path, mtime: f.stat.mtime };
   }
   async toggleFolderInExplorer(name2) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
     let leaves = this.app.workspace.getLeavesOfType("file-explorer");
     if (leaves.length === 0) {
       const leaf = this.app.workspace.getLeftLeaf(false);
@@ -328,6 +334,28 @@ var FileService = class {
     const comp = findTreeComponent(item);
     if (comp && typeof comp.setCollapsed === "function") {
       comp.setCollapsed(!((_f = item.collapsed) != null ? _f : true));
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    const folder = this.findFolder(matchKey);
+    if (folder) {
+      try {
+        const fe = (_h = (_g = this.app.internalPlugins) == null ? void 0 : _g.plugins) == null ? void 0 : _h["file-explorer"];
+        if (typeof ((_i = fe == null ? void 0 : fe.instance) == null ? void 0 : _i.revealInFolder) === "function") {
+          fe.instance.revealInFolder(folder);
+          return;
+        }
+      } catch (e) {
+      }
+    }
+    const explorerEl = (_k = (_j = leaves[0]) == null ? void 0 : _j.view) == null ? void 0 : _k.containerEl;
+    if (!explorerEl)
+      return;
+    const items = explorerEl.querySelectorAll(".tree-item-self");
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].getAttribute("data-path") === matchKey) {
+        items[i].scrollIntoView({ block: "center" });
+        return;
+      }
     }
   }
 };
@@ -2669,6 +2697,15 @@ var FolderConfigModal = class extends import_obsidian11.Modal {
 };
 
 // src/modules/file-stats/FileStatsComponent.ts
+function formatSize(bytes) {
+  if (bytes >= 1e9)
+    return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6)
+    return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes >= 1e3)
+    return `${(bytes / 1e3).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
 var FileStatsComponent = class extends BaseComponent {
   constructor(app, settings, onSettingsChange) {
     super(app, settings);
@@ -2686,6 +2723,8 @@ var FileStatsComponent = class extends BaseComponent {
     const fsTitleWrap = header.createDiv("dashboard-module-title-wrap");
     fsTitleWrap.createEl("span", { text: "\u{1F4C1}", cls: "dashboard-module-icon" });
     fsTitleWrap.createEl("span", { text: "\u6587\u4EF6\u7EDF\u8BA1", cls: "dashboard-module-title" });
+    const totalSize = this.app.vault.getFiles().reduce((sum, f) => sum + f.stat.size, 0);
+    fsTitleWrap.createEl("span", { text: `\u5171 ${formatSize(totalSize)}`, cls: "dashboard-module-badge" });
     const addBtn = header.createEl("button", { cls: "dashboard-icon-btn", title: "\u589E\u52A0\u6587\u4EF6\u7EDF\u8BA1" });
     addBtn.style.marginLeft = "auto";
     addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
@@ -5105,9 +5144,129 @@ var VoiceTranscriptionComponent = class extends BaseComponent {
   }
 };
 
+// src/modules/large-files/LargeFilesComponent.ts
+var import_obsidian25 = require("obsidian");
+
+// src/modules/large-files/LargeFilesConfigModal.ts
+var import_obsidian24 = require("obsidian");
+var LargeFilesConfigModal = class extends import_obsidian24.Modal {
+  constructor(app, settings, onSave) {
+    super(app);
+    this.settings = { ...settings };
+    this.onSave = onSave;
+    this.minSizeKB = settings.largeFilesMinSizeKB;
+    this.maxCount = settings.largeFilesMaxCount;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("dashboard-modal");
+    contentEl.createEl("h2", { text: "\u5927\u6587\u4EF6\u914D\u7F6E" });
+    const field1 = contentEl.createDiv("dashboard-field");
+    field1.createEl("label", { text: "\u6700\u5C0F\u6587\u4EF6\u5927\u5C0F\uFF08KB\uFF09\uFF0C\u4F4E\u4E8E\u6B64\u5927\u5C0F\u7684\u6587\u4EF6\u4E0D\u663E\u793A" });
+    const input1 = field1.createEl("input", {
+      type: "number",
+      value: String(this.minSizeKB),
+      attr: { min: "0", step: "1" }
+    });
+    input1.addEventListener("change", () => {
+      this.minSizeKB = Math.max(0, parseInt(input1.value) || 0);
+    });
+    const field2 = contentEl.createDiv("dashboard-field");
+    field2.createEl("label", { text: "\u6700\u591A\u663E\u793A\u6761\u6570" });
+    const input2 = field2.createEl("input", {
+      type: "number",
+      value: String(this.maxCount),
+      attr: { min: "1", max: "100", step: "1" }
+    });
+    input2.addEventListener("change", () => {
+      this.maxCount = Math.max(1, Math.min(100, parseInt(input2.value) || 20));
+    });
+    const actions = contentEl.createDiv("dashboard-modal-actions");
+    actions.style.cssText = "justify-content:flex-end;";
+    actions.createEl("button", { text: "\u53D6\u6D88" }).addEventListener("click", () => this.close());
+    const saveBtn = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
+    saveBtn.addEventListener("click", () => {
+      this.settings.largeFilesMinSizeKB = this.minSizeKB;
+      this.settings.largeFilesMaxCount = this.maxCount;
+      this.onSave(this.settings);
+      this.close();
+      new import_obsidian24.Notice("\u5927\u6587\u4EF6\u914D\u7F6E\u5DF2\u4FDD\u5B58");
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+
+// src/modules/large-files/LargeFilesComponent.ts
+function formatSize2(bytes) {
+  if (bytes >= 1e9)
+    return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6)
+    return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes >= 1e3)
+    return `${(bytes / 1e3).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+var LargeFilesComponent = class extends BaseComponent {
+  constructor(app, settings, onSettingsChange) {
+    super(app, settings);
+    this.onSettingsChange = onSettingsChange;
+  }
+  get id() {
+    return "large-files";
+  }
+  async render(container) {
+    const mod = container.createDiv("dashboard-module");
+    const header = mod.createDiv("dashboard-module-header");
+    const titleWrap = header.createDiv("dashboard-module-title-wrap");
+    titleWrap.createEl("span", { text: "\u{1F4E6}", cls: "dashboard-module-icon" });
+    titleWrap.createEl("span", { text: "\u5927\u6587\u4EF6", cls: "dashboard-module-title" });
+    const gearBtn = header.createEl("button", {
+      cls: "dashboard-icon-btn",
+      title: "\u5927\u6587\u4EF6\u914D\u7F6E"
+    });
+    gearBtn.style.marginLeft = "auto";
+    gearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+    gearBtn.addEventListener("click", () => {
+      new LargeFilesConfigModal(this.app, this.settings, async (s) => {
+        await this.onSettingsChange(s);
+      }).open();
+    });
+    const body = mod.createDiv("dashboard-module-body");
+    const minSizeBytes = this.settings.largeFilesMinSizeKB * 1e3;
+    const maxCount = this.settings.largeFilesMaxCount;
+    const allFiles = this.app.vault.getFiles();
+    const filtered = allFiles.filter((f) => f.stat.size >= minSizeBytes).sort((a, b) => b.stat.size - a.stat.size).slice(0, maxCount).map((f) => ({ path: f.path, size: f.stat.size }));
+    if (filtered.length === 0) {
+      body.createDiv({ text: "\u6682\u65E0\u7B26\u5408\u6761\u4EF6\u7684\u5927\u6587\u4EF6", cls: "dashboard-empty" });
+      return;
+    }
+    const list = body.createDiv("dashboard-large-file-list");
+    for (const item of filtered) {
+      const row = list.createDiv("dashboard-large-file-row");
+      const nameEl = row.createEl("span", {
+        text: item.path,
+        cls: "dashboard-large-file-path",
+        title: item.path
+      });
+      nameEl.addEventListener("click", () => {
+        const f = this.app.vault.getAbstractFileByPath(item.path);
+        if (f instanceof import_obsidian25.TFile)
+          this.app.workspace.getLeaf(false).openFile(f);
+      });
+      row.createEl("span", {
+        text: formatSize2(item.size),
+        cls: "dashboard-large-file-size"
+      });
+    }
+  }
+};
+
 // src/ui/DashboardView.ts
 var DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
-var DashboardView = class extends import_obsidian24.ItemView {
+var DashboardView = class extends import_obsidian26.ItemView {
   constructor(leaf, settings, onSettingsChange) {
     super(leaf);
     // Component map by ID (for moduleOrder lookup)
@@ -5194,6 +5353,14 @@ var DashboardView = class extends import_obsidian24.ItemView {
         this.updateSettings(s);
       }
     );
+    this.largeFilesComponent = new LargeFilesComponent(
+      this.app,
+      settings,
+      async (s) => {
+        await this.onSettingsChange(s);
+        this.updateSettings(s);
+      }
+    );
     this.components = {
       "header": this.headerComponent,
       "search": this.searchComponent,
@@ -5206,7 +5373,8 @@ var DashboardView = class extends import_obsidian24.ItemView {
       "remotely-save": this.remotelySaveComponent,
       "task-quickadd": this.taskQuickAddComponent,
       "plugin-manage": this.pluginManageComponent,
-      "voice-transcription": this.voiceTranscriptionComponent
+      "voice-transcription": this.voiceTranscriptionComponent,
+      "large-files": this.largeFilesComponent
     };
   }
   getViewType() {
@@ -5354,7 +5522,7 @@ var DashboardView = class extends import_obsidian24.ItemView {
       const order = this.settings.moduleOrder || [];
       const visibility = this.settings.moduleVisibility || {};
       const deviceVisibility = this.settings.moduleDeviceVisibility || {};
-      const isPhone = import_obsidian24.Platform.isPhone;
+      const isPhone = import_obsidian26.Platform.isPhone;
       const visibleOrder = [];
       for (const moduleId of order) {
         if (visibility[moduleId] === false)
@@ -5451,7 +5619,7 @@ var DashboardView = class extends import_obsidian24.ItemView {
 };
 
 // src/modules/llm-command/settings.ts
-var import_obsidian25 = require("obsidian");
+var import_obsidian27 = require("obsidian");
 function addExampleHint(setting, example) {
   const input = setting.controlEl.querySelector("input");
   if (!input)
@@ -5465,34 +5633,34 @@ function addExampleHint(setting, example) {
 }
 function renderLLMSettings(containerEl, ctx) {
   containerEl.createEl("h3", { text: "\u6A21\u578B\u914D\u7F6E" });
-  const s1 = new import_obsidian25.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
+  const s1 = new import_obsidian27.Setting(containerEl).setName("API Base URL").setDesc("OpenAI Compatible \u63A5\u53E3\u5730\u5740").addText(
     (text) => text.setPlaceholder("https://api.openai.com/v1").setValue(ctx.settings.apiBaseUrl).onChange(async (value) => {
       ctx.settings.apiBaseUrl = value;
       await ctx.saveSettings();
     })
   );
   addExampleHint(s1, "https://api.openai.com/v1");
-  new import_obsidian25.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u82E5\u542F\u7528 Git \u540C\u6B65\u8BF7\u786E\u8BA4\u5DF2\u5FFD\u7565\u8BE5\u6587\u4EF6").addText((text) => {
+  new import_obsidian27.Setting(containerEl).setName("API Key").setDesc("\u4F60\u7684 API \u5BC6\u94A5\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u82E5\u542F\u7528 Git \u540C\u6B65\u8BF7\u786E\u8BA4\u5DF2\u5FFD\u7565\u8BE5\u6587\u4EF6").addText((text) => {
     text.setPlaceholder("sk-...").setValue(ctx.settings.apiKey).onChange(async (value) => {
       ctx.settings.apiKey = value;
       await ctx.saveSettings();
     });
     text.inputEl.type = "password";
   });
-  const s2 = new import_obsidian25.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
+  const s2 = new import_obsidian27.Setting(containerEl).setName("\u6A21\u578B\u540D\u79F0").addText(
     (text) => text.setPlaceholder("gpt-4o").setValue(ctx.settings.modelName).onChange(async (value) => {
       ctx.settings.modelName = value;
       await ctx.saveSettings();
     })
   );
   addExampleHint(s2, "gpt-4o");
-  new import_obsidian25.Setting(containerEl).setName("Temperature").addSlider(
+  new import_obsidian27.Setting(containerEl).setName("Temperature").addSlider(
     (slider) => slider.setLimits(0, 2, 0.1).setValue(ctx.settings.temperature).setDynamicTooltip().onChange(async (value) => {
       ctx.settings.temperature = value;
       await ctx.saveSettings();
     })
   );
-  new import_obsidian25.Setting(containerEl).setName("Max Tokens").addText(
+  new import_obsidian27.Setting(containerEl).setName("Max Tokens").addText(
     (text) => text.setValue(String(ctx.settings.maxTokens)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n)) {
@@ -5501,13 +5669,13 @@ function renderLLMSettings(containerEl, ctx) {
       }
     })
   );
-  new import_obsidian25.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
+  new import_obsidian27.Setting(containerEl).setName("\u7528\u91CF\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u586B\u5199\u540E\u4F18\u5148\u4F7F\u7528\u63A5\u53E3\u6570\u636E\uFF0C\u5426\u5219\u7528\u672C\u5730\u7EDF\u8BA1").addText(
     (text) => text.setPlaceholder("https://...").setValue(ctx.settings.tokenUsageApiUrl).onChange(async (value) => {
       ctx.settings.tokenUsageApiUrl = value;
       await ctx.saveSettings();
     })
   );
-  const s3 = new import_obsidian25.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
+  const s3 = new import_obsidian27.Setting(containerEl).setName("\u4F59\u989D\u63A5\u53E3\u5730\u5740").setDesc("\u9009\u586B\u3002\u5982 DeepSeek: https://api.deepseek.com/user/balance").addText(
     (text) => text.setPlaceholder("https://...").setValue(ctx.settings.tokenBalanceApiUrl).onChange(async (value) => {
       ctx.settings.tokenBalanceApiUrl = value;
       await ctx.saveSettings();
@@ -5517,10 +5685,10 @@ function renderLLMSettings(containerEl, ctx) {
 }
 
 // src/modules/file-stats/settings.ts
-var import_obsidian26 = require("obsidian");
+var import_obsidian28 = require("obsidian");
 function renderFileStatsSettings(containerEl, ctx) {
   containerEl.createEl("h3", { text: "\u6587\u4EF6\u7EDF\u8BA1" });
-  new import_obsidian26.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
+  new import_obsidian28.Setting(containerEl).setName("\u7EDF\u8BA1\u6587\u4EF6\u5939").setDesc("\u9017\u53F7\u5206\u9694\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\u5217\u8868\uFF0C\u5982 raw, wiki, raw/\u5B50\u76EE\u5F55").addText(
     (text) => text.setValue(ctx.settings.trackedFolders.join(", ")).onChange(async (value) => {
       ctx.settings.trackedFolders = value.split(",").map((s) => s.trim()).filter(Boolean);
       await ctx.saveSettings();
@@ -5529,7 +5697,7 @@ function renderFileStatsSettings(containerEl, ctx) {
 }
 
 // src/modules/heatmap/settings.ts
-var import_obsidian27 = require("obsidian");
+var import_obsidian29 = require("obsidian");
 var reportLabels = {
   daily: "\u65E5\u62A5",
   weekly: "\u5468\u62A5",
@@ -5542,31 +5710,31 @@ function renderReportSettings(containerEl, ctx) {
   for (const type of Object.keys(reportLabels)) {
     const cfg = ctx.settings.reportConfigs[type];
     containerEl.createEl("h4", { text: reportLabels[type] });
-    new import_obsidian27.Setting(containerEl).setName("\u542F\u7528").addToggle(
+    new import_obsidian29.Setting(containerEl).setName("\u542F\u7528").addToggle(
       (toggle) => toggle.setValue(cfg.enabled).onChange(async (value) => {
         cfg.enabled = value;
         await ctx.saveSettings();
       })
     );
-    new import_obsidian27.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
+    new import_obsidian29.Setting(containerEl).setName("\u65B0\u5EFA\u65F6\u5F39\u7A97\u786E\u8BA4").setDesc("\u70B9\u51FB\u6CA1\u6709\u5BF9\u5E94\u62A5\u544A\u7684\u65E5\u671F\u65F6\uFF0C\u662F\u5426\u5148\u5F39\u7A97\u786E\u8BA4\u518D\u65B0\u5EFA").addToggle(
       (toggle) => toggle.setValue(cfg.confirmBeforeCreate).onChange(async (value) => {
         cfg.confirmBeforeCreate = value;
         await ctx.saveSettings();
       })
     );
-    new import_obsidian27.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
+    new import_obsidian29.Setting(containerEl).setName("\u5B58\u653E\u76EE\u5F55").setDesc("\u6587\u4EF6\u5B58\u50A8\u7684\u6839\u76EE\u5F55").addText(
       (text) => text.setValue(cfg.directory).onChange(async (value) => {
         cfg.directory = value.trim();
         await ctx.saveSettings();
       })
     );
-    new import_obsidian27.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc("\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD").addText(
+    new import_obsidian29.Setting(containerEl).setName("\u6587\u4EF6\u8DEF\u5F84\u683C\u5F0F").setDesc("\u652F\u6301 YYYY/YY/MM/M/DD/D \u7B49 moment.js \u683C\u5F0F\u4EE4\u724C\u3002\u5982 YYYY/MM/YYYY-MM-DD").addText(
       (text) => text.setValue(cfg.filenameFormat).onChange(async (value) => {
         cfg.filenameFormat = value.trim();
         await ctx.saveSettings();
       })
     );
-    new import_obsidian27.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
+    new import_obsidian29.Setting(containerEl).setName("\u6A21\u677F\u8DEF\u5F84").setDesc("vault \u4E2D\u7684\u6A21\u677F\u6587\u4EF6\u8DEF\u5F84\uFF08\u4E0D\u542B .md \u540E\u7F00\uFF09\uFF0C\u7559\u7A7A\u5219\u4E0D\u4F7F\u7528\u6A21\u677F").addText(
       (text) => text.setValue(cfg.templatePath).onChange(async (value) => {
         cfg.templatePath = value.trim();
         await ctx.saveSettings();
@@ -5576,7 +5744,7 @@ function renderReportSettings(containerEl, ctx) {
 }
 
 // src/modules/git-sync/settings.ts
-var import_obsidian28 = require("obsidian");
+var import_obsidian30 = require("obsidian");
 function addExampleHint2(setting, example) {
   const input = setting.controlEl.querySelector("input");
   if (!input)
@@ -5607,54 +5775,54 @@ function addCommitPreview(setting) {
 }
 function renderGitSettings(containerEl, ctx) {
   containerEl.createEl("h3", { text: "Git \u540C\u6B65 (GitHub)" });
-  new import_obsidian28.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
+  new import_obsidian30.Setting(containerEl).setName("\u542F\u7528 Git \u540C\u6B65").setDesc("\u5F00\u542F\u540E\u53EF\u5728 Dashboard \u4E2D\u8FDB\u884C Push/Pull \u64CD\u4F5C").addToggle(
     (toggle) => toggle.setValue(ctx.settings.gitEnabled).onChange(async (value) => {
       ctx.settings.gitEnabled = value;
       await ctx.saveSettings();
     })
   );
-  const s1 = new import_obsidian28.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
+  const s1 = new import_obsidian30.Setting(containerEl).setName("\u4ED3\u5E93\u5730\u5740").setDesc("GitHub \u4ED3\u5E93 HTTPS \u5730\u5740\uFF0C\u5982 https://github.com/username/repo.git").addText(
     (text) => text.setPlaceholder("https://github.com/username/repo.git").setValue(ctx.settings.gitRemoteURL).onChange(async (value) => {
       ctx.settings.gitRemoteURL = value.trim();
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s1, "https://github.com/username/repo.git");
-  const s2 = new import_obsidian28.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
+  const s2 = new import_obsidian30.Setting(containerEl).setName("\u8FDC\u7A0B\u540D\u79F0").setDesc("Git remote \u540D\u79F0\uFF0C\u9ED8\u8BA4 origin").addText(
     (text) => text.setPlaceholder("origin").setValue(ctx.settings.gitRemoteName).onChange(async (value) => {
       ctx.settings.gitRemoteName = value.trim() || "origin";
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s2, "origin");
-  const s3 = new import_obsidian28.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
+  const s3 = new import_obsidian30.Setting(containerEl).setName("\u5206\u652F\u540D").setDesc("\u9ED8\u8BA4\u5206\u652F\u540D\uFF0C\u5982 main \u6216 master").addText(
     (text) => text.setPlaceholder("main").setValue(ctx.settings.gitBranchName).onChange(async (value) => {
       ctx.settings.gitBranchName = value.trim() || "main";
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s3, "main");
-  const s4 = new import_obsidian28.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
+  const s4 = new import_obsidian30.Setting(containerEl).setName("GitHub \u7528\u6237\u540D").setDesc("GitHub \u767B\u5F55\u7528\u6237\u540D\u6216\u90AE\u7BB1").addText(
     (text) => text.setPlaceholder("your-username").setValue(ctx.settings.gitUsername).onChange(async (value) => {
       ctx.settings.gitUsername = value.trim();
       await ctx.saveSettings();
     })
   );
   addExampleHint2(s4, "your-username");
-  new import_obsidian28.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u8BF7\u52A1\u5FC5\u5C06\u8BE5\u6587\u4EF6\u52A0\u5165 .gitignore").addText((text) => {
+  new import_obsidian30.Setting(containerEl).setName("GitHub Token").setDesc("GitHub \u79C1\u4EBA\u4EE4\u724C\uFF08https://github.com/settings/tokens\uFF09\u3002\u26A0 \u660E\u6587\u4FDD\u5B58\u5728 data.json\uFF0C\u8BF7\u52A1\u5FC5\u5C06\u8BE5\u6587\u4EF6\u52A0\u5165 .gitignore").addText((text) => {
     text.setPlaceholder("your-token").setValue(ctx.settings.gitPassword).onChange(async (value) => {
       ctx.settings.gitPassword = value.trim();
       await ctx.saveSettings();
     });
     text.inputEl.type = "password";
   });
-  new import_obsidian28.Setting(containerEl).setName("\u81EA\u52A8 Push").setDesc("\u5F00\u542F\u540E\u6309\u8BBE\u5B9A\u7684\u65F6\u95F4\u95F4\u9694\u81EA\u52A8 push").addToggle(
+  new import_obsidian30.Setting(containerEl).setName("\u81EA\u52A8 Push").setDesc("\u5F00\u542F\u540E\u6309\u8BBE\u5B9A\u7684\u65F6\u95F4\u95F4\u9694\u81EA\u52A8 push").addToggle(
     (toggle) => toggle.setValue(ctx.settings.gitAutoPushEnabled).onChange(async (value) => {
       ctx.settings.gitAutoPushEnabled = value;
       await ctx.saveSettings();
     })
   );
-  const s5 = new import_obsidian28.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
+  const s5 = new import_obsidian30.Setting(containerEl).setName("\u81EA\u52A8 Push \u95F4\u9694\uFF08\u5206\u949F\uFF09").setDesc("\u8BBE\u4E3A 0 \u8868\u793A\u6BCF\u6B21 vault \u53D8\u66F4\u540E\u81EA\u52A8 push").addText(
     (text) => text.setPlaceholder("30").setValue(String(ctx.settings.gitAutoPushInterval)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n) && n >= 0) {
@@ -5664,7 +5832,7 @@ function renderGitSettings(containerEl, ctx) {
     })
   );
   addExampleHint2(s5, "30");
-  const sPoll = new import_obsidian28.Setting(containerEl).setName("Git \u72B6\u6001\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("Dashboard \u4E2D Git \u6A21\u5757\u81EA\u52A8\u5237\u65B0 status \u7684\u95F4\u9694\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u8F6E\u8BE2\uFF08\u4ECD\u4F1A\u5728 vault \u53D8\u66F4\u65F6\u5237\u65B0\uFF09").addText(
+  const sPoll = new import_obsidian30.Setting(containerEl).setName("Git \u72B6\u6001\u5237\u65B0\u95F4\u9694\uFF08\u79D2\uFF09").setDesc("Dashboard \u4E2D Git \u6A21\u5757\u81EA\u52A8\u5237\u65B0 status \u7684\u95F4\u9694\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u8F6E\u8BE2\uFF08\u4ECD\u4F1A\u5728 vault \u53D8\u66F4\u65F6\u5237\u65B0\uFF09").addText(
     (text) => text.setPlaceholder("30").setValue(String(ctx.settings.gitPollInterval)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n) && n >= 0) {
@@ -5674,7 +5842,7 @@ function renderGitSettings(containerEl, ctx) {
     })
   );
   addExampleHint2(sPoll, "30");
-  const sTimeout = new import_obsidian28.Setting(containerEl).setName("Push/Pull \u8D85\u65F6\uFF08\u5206\u949F\uFF09").setDesc("\u7F51\u7EDC\u4F20\u8F93\u8D85\u65F6\u65F6\u95F4\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u9650\u65F6\uFF1B\u5927\u4ED3\u5E93\u9996\u6B21\u63A8\u9001\u5EFA\u8BAE\u8BBE 10 \u6216\u66F4\u5927").addText(
+  const sTimeout = new import_obsidian30.Setting(containerEl).setName("Push/Pull \u8D85\u65F6\uFF08\u5206\u949F\uFF09").setDesc("\u7F51\u7EDC\u4F20\u8F93\u8D85\u65F6\u65F6\u95F4\u3002\u8BBE\u4E3A 0 \u8868\u793A\u4E0D\u9650\u65F6\uFF1B\u5927\u4ED3\u5E93\u9996\u6B21\u63A8\u9001\u5EFA\u8BAE\u8BBE 10 \u6216\u66F4\u5927").addText(
     (text) => text.setPlaceholder("5").setValue(String(ctx.settings.gitPushTimeout)).onChange(async (value) => {
       const n = parseInt(value);
       if (!isNaN(n) && n >= 0) {
@@ -5684,7 +5852,7 @@ function renderGitSettings(containerEl, ctx) {
     })
   );
   addExampleHint2(sTimeout, "5");
-  const s6 = new import_obsidian28.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
+  const s6 = new import_obsidian30.Setting(containerEl).setName("Commit \u6D88\u606F\u6A21\u677F").setDesc("\u652F\u6301 {{date}} \u548C {{time}} \u5360\u4F4D\u7B26").addText(
     (text) => text.setPlaceholder("auto: {{date}} {{time}}").setValue(ctx.settings.gitCommitTemplate).onChange(async (value) => {
       ctx.settings.gitCommitTemplate = value.trim();
       await ctx.saveSettings();
@@ -5695,7 +5863,7 @@ function renderGitSettings(containerEl, ctx) {
 }
 
 // src/main.ts
-var LLMWikiDashboardPlugin = class extends import_obsidian29.Plugin {
+var LLMWikiDashboardPlugin = class extends import_obsidian31.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(
@@ -5773,7 +5941,7 @@ var LLMWikiDashboardPlugin = class extends import_obsidian29.Plugin {
     });
   }
 };
-var DashboardSettingTab = class extends import_obsidian29.PluginSettingTab {
+var DashboardSettingTab = class extends import_obsidian31.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -5786,21 +5954,21 @@ var DashboardSettingTab = class extends import_obsidian29.PluginSettingTab {
       settings: this.plugin.settings,
       saveSettings: () => this.plugin.saveSettings()
     };
-    const s1 = new import_obsidian29.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
+    const s1 = new import_obsidian31.Setting(containerEl).setName("\u6807\u7B7E\u9875\u6807\u9898").setDesc("\u81EA\u5B9A\u4E49 Dashboard \u6807\u7B7E\u9875\u663E\u793A\u7684\u540D\u79F0\uFF0C\u53EF\u968F\u65F6\u4FEE\u6539").addText(
       (text) => text.setPlaceholder("Dashboard").setValue(this.plugin.settings.dashboardTitle).onChange(async (value) => {
         this.plugin.settings.dashboardTitle = value.trim() || "Dashboard";
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(s1, "Dashboard");
-    const s2 = new import_obsidian29.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
+    const s2 = new import_obsidian31.Setting(containerEl).setName("\u6807\u7B7E\u9875\u63CF\u8FF0").setDesc("\u663E\u793A\u5728\u6807\u7B7E\u9875\u6807\u9898\u4E0B\u65B9\u7684\u63CF\u8FF0\u6587\u5B57").addText(
       (text) => text.setPlaceholder("\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F").setValue(this.plugin.settings.dashboardDesc).onChange(async (value) => {
         this.plugin.settings.dashboardDesc = value.trim();
         await this.plugin.saveSettings();
       })
     );
     this.addExampleHint(s2, "\u79B9\u601D\u5929\u4E0B\u6709\u6EBA\u8005\uFF0C\u7531\u5DF1\u6EBA\u4E4B\u4E5F");
-    new import_obsidian29.Setting(containerEl).setName("\u542F\u52A8\u65F6\u81EA\u52A8\u6253\u5F00 Dashboard").setDesc("Obsidian \u542F\u52A8\u3001\u5E03\u5C40\u5C31\u7EEA\u540E\u81EA\u52A8\u6253\u5F00 Dashboard \u9762\u677F").addToggle(
+    new import_obsidian31.Setting(containerEl).setName("\u542F\u52A8\u65F6\u81EA\u52A8\u6253\u5F00 Dashboard").setDesc("Obsidian \u542F\u52A8\u3001\u5E03\u5C40\u5C31\u7EEA\u540E\u81EA\u52A8\u6253\u5F00 Dashboard \u9762\u677F").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.openOnStartup).onChange(async (value) => {
         this.plugin.settings.openOnStartup = value;
         await this.plugin.saveSettings();
@@ -5812,7 +5980,7 @@ var DashboardSettingTab = class extends import_obsidian29.PluginSettingTab {
       cls: "dashboard-field-hint"
     });
     for (const mid of MODULE_IDS) {
-      new import_obsidian29.Setting(containerEl).setName(MODULE_LABELS[mid]).addToggle(
+      new import_obsidian31.Setting(containerEl).setName(MODULE_LABELS[mid]).addToggle(
         (toggle) => {
           var _a;
           return toggle.setValue(((_a = this.plugin.settings.moduleVisibility) == null ? void 0 : _a[mid]) !== false).onChange(async (value) => {

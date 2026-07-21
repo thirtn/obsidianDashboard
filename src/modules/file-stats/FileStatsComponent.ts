@@ -5,6 +5,13 @@ import { FileService, RecentFile } from "../../services/FileService";
 import { FolderConfigModal } from "./FolderConfigModal";
 import { formatRelativeTime, attachFileListPopover } from "../../shared/utils";
 
+function formatSize(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
 export class FileStatsComponent extends BaseComponent {
   private fileService: FileService;
   private onSettingsChange: (s: DashboardSettings) => Promise<void>;
@@ -25,6 +32,8 @@ export class FileStatsComponent extends BaseComponent {
     const fsTitleWrap = header.createDiv("dashboard-module-title-wrap");
     fsTitleWrap.createEl("span", { text: "📁", cls: "dashboard-module-icon" });
     fsTitleWrap.createEl("span", { text: "文件统计", cls: "dashboard-module-title" });
+    const totalSize = this.app.vault.getFiles().reduce((sum, f) => sum + f.stat.size, 0);
+    fsTitleWrap.createEl("span", { text: `共 ${formatSize(totalSize)}`, cls: "dashboard-module-badge" });
     const addBtn = header.createEl("button", { cls: "dashboard-icon-btn", title: "增加文件统计" });
     addBtn.style.marginLeft = "auto";
     addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;

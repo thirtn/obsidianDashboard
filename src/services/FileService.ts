@@ -219,5 +219,31 @@ export class FileService {
     if (comp && typeof comp.setCollapsed === "function") {
       comp.setCollapsed(!(item.collapsed ?? true));
     }
+
+    // Scroll the file explorer to reveal the target folder.
+    await new Promise((r) => setTimeout(r, 300));
+
+    // 1) Try internal revealInFolder (handles virtual scrolling correctly)
+    const folder = this.findFolder(matchKey);
+    if (folder) {
+      try {
+        const fe = (this.app as any).internalPlugins?.plugins?.["file-explorer"];
+        if (typeof fe?.instance?.revealInFolder === "function") {
+          fe.instance.revealInFolder(folder);
+          return;
+        }
+      } catch { /* fall through */ }
+    }
+
+    // 2) Fallback: DOM search for nearby items
+    const explorerEl = (leaves[0]?.view as any)?.containerEl as HTMLElement | undefined;
+    if (!explorerEl) return;
+    const items = explorerEl.querySelectorAll(".tree-item-self");
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].getAttribute("data-path") === matchKey) {
+        (items[i] as HTMLElement).scrollIntoView({ block: "center" });
+        return;
+      }
+    }
   }
 }

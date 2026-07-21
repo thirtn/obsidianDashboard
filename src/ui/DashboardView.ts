@@ -21,6 +21,7 @@ import { RemotelySaveComponent } from "../modules/remotely-save/RemotelySaveComp
 import { TaskQuickAddComponent } from "../modules/task-quickadd/TaskQuickAddComponent";
 import { PluginManageComponent } from "../modules/plugin-manage/PluginManageComponent";
 import { VoiceTranscriptionComponent } from "../modules/voice-transcription/VoiceTranscriptionComponent";
+import { LargeFilesComponent } from "../modules/large-files/LargeFilesComponent";
 
 export const DASHBOARD_VIEW_TYPE = "yy-obsidian-dashboard";
 
@@ -50,6 +51,7 @@ export class DashboardView extends ItemView {
   private taskQuickAddComponent!: TaskQuickAddComponent;
   private pluginManageComponent!: PluginManageComponent;
   private voiceTranscriptionComponent!: VoiceTranscriptionComponent;
+  private largeFilesComponent!: LargeFilesComponent;
 
   // Component map by ID (for moduleOrder lookup)
   private components: Record<string, BaseComponent> = {};
@@ -121,6 +123,10 @@ export class DashboardView extends ItemView {
       this.app, settings,
       async (s) => { await this.onSettingsChange(s); this.updateSettings(s); }
     );
+    this.largeFilesComponent = new LargeFilesComponent(
+      this.app, settings,
+      async (s) => { await this.onSettingsChange(s); this.updateSettings(s); }
+    );
 
     // Build component map
     this.components = {
@@ -136,6 +142,7 @@ export class DashboardView extends ItemView {
       "task-quickadd": this.taskQuickAddComponent,
       "plugin-manage": this.pluginManageComponent,
       "voice-transcription": this.voiceTranscriptionComponent,
+      "large-files": this.largeFilesComponent,
     };
   }
 

@@ -26,6 +26,7 @@ export const MODULE_IDS = [
   "task-quickadd",
   "plugin-manage",
   "voice-transcription",
+  "large-files",
 ] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];
@@ -40,6 +41,7 @@ export const MODULE_LABELS: Record<ModuleId, string> = {
   "task-quickadd": "快速添加任务",
   "plugin-manage": "插件管理",
   "voice-transcription": "语音转文字",
+  "large-files": "大文件",
 };
 
 export function defaultModuleVisibility(): Record<string, boolean> {
@@ -104,6 +106,9 @@ export interface DashboardSettings {
   // Voice transcription
   whisperModelName: string;
   whisperApiBaseUrl: string;
+  // Large files module
+  largeFilesMinSizeKB: number;
+  largeFilesMaxCount: number;
 }
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
@@ -141,6 +146,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
     "remotely-save",
     "task-quickadd",
     "plugin-manage",
+    "large-files",
   ],
   moduleVisibility: defaultModuleVisibility(),
   moduleDeviceVisibility: {
@@ -153,10 +159,13 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
     "task-quickadd": "both",
     "plugin-manage": "desktop",
     "voice-transcription": "both",
+    "large-files": "desktop",
   },
   openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
   tokenUsageDataPath: ".dashboard/token-usage.json",
   whisperModelName: "whisper-1",
   whisperApiBaseUrl: "",
+  largeFilesMinSizeKB: 0,
+  largeFilesMaxCount: 20,
 };

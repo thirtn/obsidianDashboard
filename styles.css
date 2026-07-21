@@ -1435,6 +1435,50 @@
 .dashboard-report-panel .dashboard-field {
   margin-bottom: 12px;
 }
+/* ─── Module: Large Files ───────────────────────────────────────────────── */
+.dashboard-large-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.dashboard-large-file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+
+.dashboard-large-file-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.dashboard-large-file-path {
+  color: var(--text-normal);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-large-file-path:hover {
+  color: var(--text-accent);
+}
+
+.dashboard-large-file-size {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
 /* ─── Module: LLM Command ───────────────────────────────────────────────── */
 .dashboard-select {
   width: 100%;
