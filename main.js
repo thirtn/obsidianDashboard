@@ -5559,6 +5559,14 @@ var DashboardView = class extends import_obsidian26.ItemView {
           const collapsed = modEl.classList.toggle("dashboard-module-collapsed");
           setModuleCollapsed(moduleId, collapsed);
         });
+        header.addEventListener("click", (e) => {
+          const target = e.target;
+          if (target.closest(".dashboard-module-collapse-toggle") || target.closest(".dashboard-module-drag-handle") || target.closest("button") || target.closest("a") || target.closest("input") || target.closest("select")) {
+            return;
+          }
+          const collapsed = modEl.classList.toggle("dashboard-module-collapsed");
+          setModuleCollapsed(moduleId, collapsed);
+        });
         const handle = document.createElement("span");
         handle.className = "dashboard-module-drag-handle";
         handle.innerHTML = "\u22EE\u22EE";

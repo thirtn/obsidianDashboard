@@ -343,13 +343,30 @@ export class DashboardView extends ItemView {
           modEl.classList.add("dashboard-module-collapsed");
         }
 
-        // Collapse toggle
+        // Collapse toggle button
         const toggle = document.createElement("span");
         toggle.className = "dashboard-module-collapse-toggle";
         toggle.innerHTML = "▾";
         toggle.setAttribute("title", "折叠/展开");
         toggle.addEventListener("click", (e) => {
           e.stopPropagation();
+          const collapsed = modEl.classList.toggle("dashboard-module-collapsed");
+          setModuleCollapsed(moduleId, collapsed);
+        });
+
+        // Click header title area to toggle collapse
+        header.addEventListener("click", (e) => {
+          const target = e.target as HTMLElement;
+          if (
+            target.closest(".dashboard-module-collapse-toggle") ||
+            target.closest(".dashboard-module-drag-handle") ||
+            target.closest("button") ||
+            target.closest("a") ||
+            target.closest("input") ||
+            target.closest("select")
+          ) {
+            return;
+          }
           const collapsed = modEl.classList.toggle("dashboard-module-collapsed");
           setModuleCollapsed(moduleId, collapsed);
         });

@@ -146,6 +146,7 @@
 .dashboard-module-header {
   display: flex;
   align-items: center;
+  cursor: pointer;
   padding: clamp(4px, 0.8vw, 8px) clamp(8px, 1.2vw, 12px);
   background: var(--background-secondary-alt);
   border-bottom: 1px solid var(--background-modifier-border);
