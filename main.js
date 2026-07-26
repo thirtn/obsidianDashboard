@@ -905,6 +905,36 @@ var GitService = class {
       throw err;
     }
   }
+  /** Async version using execFile — does NOT block the main thread. */
+  execArgsAsync(args, opts = {}) {
+    if (this.isMobile) {
+      return Promise.reject(new Error("Git \u64CD\u4F5C\u4EC5\u652F\u6301\u684C\u9762\u7AEF"));
+    }
+    const { execFile } = require("child_process");
+    return new Promise((resolve, reject) => {
+      var _a;
+      const execOpts = {
+        cwd: this.vaultPath,
+        encoding: opts.encoding === "buffer" ? void 0 : "utf-8",
+        maxBuffer: 10 * 1024 * 1024
+      };
+      const t = (_a = opts.timeout) != null ? _a : 3e4;
+      if (t > 0)
+        execOpts.timeout = t;
+      execFile("git", args, execOpts, (error, stdout, stderr) => {
+        if (error) {
+          const msg = (stderr || error.message || "Git \u547D\u4EE4\u6267\u884C\u5931\u8D25").trim();
+          const err = new Error(msg);
+          if (error.signal === "SIGTERM" || /ETIMEDOUT|timed out/i.test(msg)) {
+            err.code = "TIMEOUT";
+          }
+          reject(err);
+        } else {
+          resolve(stdout);
+        }
+      });
+    });
+  }
   async isGitRepo() {
     if (this.isMobile)
       return false;
@@ -1130,15 +1160,15 @@ var GitService = class {
     const args = this.withAuthArgs(username, password);
     args.push("push", "--set-upstream", remote, branch);
     try {
-      this.execArgs(args, { timeout });
+      await this.execArgsAsync(args, { timeout });
       try {
-        this.execArgs(["fetch", remote, branch], { timeout: 3e4 });
+        await this.execArgsAsync(["fetch", remote, branch], { timeout: 3e4 });
       } catch (e) {
       }
       return "\u63A8\u9001\u6210\u529F";
     } catch (e) {
       if ((e == null ? void 0 : e.code) === "TIMEOUT") {
-        const reconciled = this.verifyRemoteMatchesLocal(remote, branch, username, password);
+        const reconciled = await this.verifyRemoteMatchesLocal(remote, branch, username, password);
         if (reconciled) {
           return "\u63A8\u9001\u6210\u529F\uFF08\u5BA2\u6237\u7AEF\u8D85\u65F6\uFF0C\u4F46\u670D\u52A1\u7AEF\u5DF2\u5B8C\u6210\uFF09";
         }
@@ -1147,10 +1177,10 @@ var GitService = class {
     }
   }
   /** Fetch and check whether remote/branch tip equals local HEAD. Returns true if reconciled. */
-  verifyRemoteMatchesLocal(remote, branch, username, password) {
+  async verifyRemoteMatchesLocal(remote, branch, username, password) {
     try {
       const auth = this.withAuthArgs(username, password);
-      this.execArgs([...auth, "fetch", remote, branch], { timeout: 3e4 });
+      await this.execArgsAsync([...auth, "fetch", remote, branch], { timeout: 3e4 });
       const localHead = this.execArgs(["rev-parse", "HEAD"]).trim();
       const remoteHead = this.execArgs(["rev-parse", `${remote}/${branch}`]).trim();
       return localHead === remoteHead && localHead.length > 0;
@@ -1163,7 +1193,7 @@ var GitService = class {
     const timeout = min > 0 ? min * 60 * 1e3 : 0;
     const args = this.withAuthArgs(username, password);
     args.push("pull", remote, branch, "--no-edit");
-    const output = this.execArgs(args, { timeout });
+    const output = await this.execArgsAsync(args, { timeout });
     return output.trim() || "\u62C9\u53D6\u5B8C\u6210";
   }
   /** Prefix git args with `-c http.extraHeader=...` for GitHub token auth, avoiding token in URL. */
@@ -1194,7 +1224,7 @@ var GitService = class {
     if (this.isMobile)
       return [];
     try {
-      const output = this.execArgs(["diff-tree", "--no-commit-id", "--name-only", "-r", hash]);
+      const output = this.execArgs(["-c", "core.quotePath=false", "diff-tree", "--no-commit-id", "--name-only", "-r", hash]);
       return output.trim().split("\n").filter(Boolean);
     } catch (e) {
       return [];
@@ -4117,23 +4147,23 @@ var GitSyncComponent = class extends BaseComponent {
             new import_obsidian17.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
             return;
           }
-          commitOnlyBtn.disabled = true;
-          commitOnlyBtn.textContent = "\u63D0\u4EA4\u4E2D...";
-          try {
-            const staged = await gitService.stageFiles(selected);
-            const committed = await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
-            if (committed) {
-              new import_obsidian17.Notice(staged.length === selected.length ? `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
-            } else {
-              new import_obsidian17.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u53D8\u66F4");
+          const message = msgInput.value.trim() || view.buildCommitMessage();
+          this.close();
+          setTimeout(async () => {
+            try {
+              const staged = await gitService.stageFiles(selected);
+              const committed = await gitService.commit(message);
+              if (committed) {
+                const stagedInfo = staged.length === selected.length ? `\u5DF2\u6682\u5B58 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u6682\u5B58 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u5931\u8D25\uFF09`;
+                new import_obsidian17.Notice(`${stagedInfo}\uFF0C\u63D0\u4EA4\u6210\u529F`);
+              } else {
+                new import_obsidian17.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u53D8\u66F4");
+              }
+              await view.update();
+            } catch (e) {
+              new import_obsidian17.Notice(`Commit \u5931\u8D25: ${e.message}`);
             }
-            this.close();
-            await view.update();
-          } catch (e) {
-            new import_obsidian17.Notice(`Commit \u5931\u8D25: ${e.message}`);
-            commitOnlyBtn.disabled = false;
-            commitOnlyBtn.textContent = "\u4EC5 Commit";
-          }
+          }, 0);
         });
         const pushBtn = rightBtns.createEl("button", { text: "Commit & Push", cls: "mod-cta" });
         pushBtn.addEventListener("click", async () => {
@@ -4142,40 +4172,47 @@ var GitSyncComponent = class extends BaseComponent {
             new import_obsidian17.Notice("\u8BF7\u81F3\u5C11\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6");
             return;
           }
-          pushBtn.disabled = true;
-          pushBtn.textContent = "\u63A8\u9001\u4E2D...";
-          let staged = [];
-          let committed = false;
-          try {
-            staged = await gitService.stageFiles(selected);
-            await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
-            committed = true;
-            await gitService.push(
-              settings.gitRemoteName,
-              settings.gitBranchName,
-              settings.gitUsername || void 0,
-              settings.gitPassword || void 0,
-              settings.gitPushTimeout
-            );
-            new import_obsidian17.Notice(staged.length === selected.length ? `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u63A8\u9001 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u6682\u5B58\u5931\u8D25\uFF09`);
-            this.close();
-            await view.update();
-          } catch (e) {
-            const isTimeout = (e == null ? void 0 : e.code) === "TIMEOUT";
-            if (committed && isTimeout) {
-              new import_obsidian17.Notice(`\u63A8\u9001\u8D85\u65F6\uFF0C\u4F46\u5DF2\u672C\u5730\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF1B\u8BF7\u7A0D\u540E\u5230\u8FDC\u7A0B\u4ED3\u5E93\u786E\u8BA4\u662F\u5426\u5DF2\u540C\u6B65`, 8e3);
-              this.close();
+          const message = msgInput.value.trim() || view.buildCommitMessage();
+          const timeoutMinutes = settings.gitPushTimeout;
+          this.close();
+          const loadingNotice = new import_obsidian17.Notice(`\u6B63\u5728\u63D0\u4EA4\u5E76\u63A8\u9001...\uFF08\u8D85\u65F6\uFF1A${timeoutMinutes > 0 ? timeoutMinutes + "\u5206\u949F" : "\u65E0\u9650\u5236"}\uFF09`, 0);
+          setTimeout(async () => {
+            let staged = [];
+            let committed = false;
+            try {
+              staged = await gitService.stageFiles(selected);
+              committed = await gitService.commit(message);
+              let pushResult;
+              if (committed) {
+                pushResult = await gitService.push(
+                  settings.gitRemoteName,
+                  settings.gitBranchName,
+                  settings.gitUsername || void 0,
+                  settings.gitPassword || void 0,
+                  timeoutMinutes
+                );
+              } else {
+                pushResult = "\u6CA1\u6709\u65B0\u7684\u53D8\u66F4\u9700\u8981\u63A8\u9001";
+              }
+              loadingNotice.hide();
+              const stagedInfo = staged.length === selected.length ? `\u5DF2\u6682\u5B58 ${staged.length} \u4E2A\u6587\u4EF6` : `\u5DF2\u6682\u5B58 ${staged.length} \u4E2A\u6587\u4EF6\uFF08${selected.length - staged.length} \u4E2A\u5931\u8D25\uFF09`;
+              new import_obsidian17.Notice(`${stagedInfo}\uFF0C${pushResult}`, 5e3);
               await view.update();
-            } else if (committed) {
-              new import_obsidian17.Notice(`\u672C\u5730\u5DF2\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF0C\u4F46\u63A8\u9001\u5931\u8D25: ${e.message}`, 8e3);
-              this.close();
+            } catch (e) {
+              loadingNotice.hide();
+              const isTimeout = (e == null ? void 0 : e.code) === "TIMEOUT";
+              if (committed && isTimeout) {
+                new import_obsidian17.Notice(`\u63A8\u9001\u8D85\u65F6\uFF08${timeoutMinutes}\u5206\u949F\uFF09\uFF0C\u4F46\u5DF2\u672C\u5730\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF1B\u8BF7\u5230\u8FDC\u7A0B\u4ED3\u5E93\u786E\u8BA4`, 8e3);
+              } else if (committed) {
+                new import_obsidian17.Notice(`\u5DF2\u672C\u5730\u63D0\u4EA4 ${staged.length} \u4E2A\u6587\u4EF6\uFF0C\u4F46\u63A8\u9001\u5931\u8D25: ${e.message}`, 8e3);
+              } else if (staged.length > 0) {
+                new import_obsidian17.Notice(`\u5DF2\u6682\u5B58 ${staged.length} \u4E2A\u6587\u4EF6\uFF0C\u4F46\u63D0\u4EA4\u5931\u8D25: ${e.message}`, 8e3);
+              } else {
+                new import_obsidian17.Notice(`\u64CD\u4F5C\u5931\u8D25: ${e.message}`, 8e3);
+              }
               await view.update();
-            } else {
-              new import_obsidian17.Notice(`Push \u5931\u8D25: ${e.message}`);
-              pushBtn.disabled = false;
-              pushBtn.textContent = "Commit & Push";
             }
-          }
+          }, 0);
         });
       }
       onClose() {

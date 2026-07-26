@@ -52,6 +52,38 @@ export class GitService {
     }
   }
 
+  /** Async version using execFile — does NOT block the main thread. */
+  private execArgsAsync(
+    args: string[],
+    opts: { encoding?: "utf-8" | "buffer"; timeout?: number } = {}
+  ): Promise<string | Buffer> {
+    if (this.isMobile) {
+      return Promise.reject(new Error("Git 操作仅支持桌面端"));
+    }
+    const { execFile } = require("child_process");
+    return new Promise((resolve, reject) => {
+      const execOpts: any = {
+        cwd: this.vaultPath,
+        encoding: opts.encoding === "buffer" ? undefined : "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+      };
+      const t = opts.timeout ?? 30000;
+      if (t > 0) execOpts.timeout = t;
+      execFile("git", args, execOpts, (error: any, stdout: string | Buffer, stderr: string) => {
+        if (error) {
+          const msg = (stderr || error.message || "Git 命令执行失败").trim();
+          const err = new Error(msg);
+          if (error.signal === "SIGTERM" || /ETIMEDOUT|timed out/i.test(msg)) {
+            (err as any).code = "TIMEOUT";
+          }
+          reject(err);
+        } else {
+          resolve(stdout);
+        }
+      });
+    });
+  }
+
   async isGitRepo(): Promise<boolean> {
     if (this.isMobile) return false;
     try {
@@ -287,14 +319,14 @@ export class GitService {
     const args = this.withAuthArgs(username, password);
     args.push("push", "--set-upstream", remote, branch);
     try {
-      this.execArgs(args, { timeout });
+      await this.execArgsAsync(args, { timeout });
       // Sync local tracking ref (in case push was killed just before it updated it).
-      try { this.execArgs(["fetch", remote, branch], { timeout: 30000 }); } catch { /* ignore */ }
+      try { await this.execArgsAsync(["fetch", remote, branch], { timeout: 30000 }); } catch { /* ignore */ }
       return "推送成功";
     } catch (e: any) {
       if (e?.code === "TIMEOUT") {
         // Push may have already reached the server. Verify by fetching and comparing HEAD.
-        const reconciled = this.verifyRemoteMatchesLocal(remote, branch, username, password);
+        const reconciled = await this.verifyRemoteMatchesLocal(remote, branch, username, password);
         if (reconciled) {
           return "推送成功（客户端超时，但服务端已完成）";
         }
@@ -304,15 +336,15 @@ export class GitService {
   }
 
   /** Fetch and check whether remote/branch tip equals local HEAD. Returns true if reconciled. */
-  private verifyRemoteMatchesLocal(
+  private async verifyRemoteMatchesLocal(
     remote: string,
     branch: string,
     username?: string,
     password?: string
-  ): boolean {
+  ): Promise<boolean> {
     try {
       const auth = this.withAuthArgs(username, password);
-      this.execArgs([...auth, "fetch", remote, branch], { timeout: 30000 });
+      await this.execArgsAsync([...auth, "fetch", remote, branch], { timeout: 30000 });
       const localHead = (this.execArgs(["rev-parse", "HEAD"]) as string).trim();
       const remoteHead = (this.execArgs(["rev-parse", `${remote}/${branch}`]) as string).trim();
       return localHead === remoteHead && localHead.length > 0;
@@ -332,7 +364,7 @@ export class GitService {
     const timeout = min > 0 ? min * 60 * 1000 : 0;
     const args = this.withAuthArgs(username, password);
     args.push("pull", remote, branch, "--no-edit");
-    const output = this.execArgs(args, { timeout }) as string;
+    const output = await this.execArgsAsync(args, { timeout }) as string;
     return output.trim() || "拉取完成";
   }
 
@@ -376,7 +408,7 @@ export class GitService {
   async getCommitFiles(hash: string): Promise<string[]> {
     if (this.isMobile) return [];
     try {
-      const output = this.execArgs(["diff-tree", "--no-commit-id", "--name-only", "-r", hash]) as string;
+      const output = this.execArgs(["-c", "core.quotePath=false", "diff-tree", "--no-commit-id", "--name-only", "-r", hash]) as string;
       return output.trim().split("\n").filter(Boolean);
     } catch {
       return [];

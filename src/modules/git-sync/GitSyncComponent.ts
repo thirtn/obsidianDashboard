@@ -483,64 +483,70 @@ export class GitSyncComponent extends BaseComponent {
         commitOnlyBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) { new Notice("请至少选择一个文件"); return; }
-          commitOnlyBtn.disabled = true;
-          commitOnlyBtn.textContent = "提交中...";
-          try {
-            const staged = await gitService.stageFiles(selected);
-            const committed = await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
-            if (committed) {
-              new Notice(staged.length === selected.length
-                ? `已提交 ${staged.length} 个文件`
-                : `已提交 ${staged.length} 个文件（${selected.length - staged.length} 个暂存失败）`);
-            } else {
-              new Notice("没有需要提交的变更");
+          const message = msgInput.value.trim() || view.buildCommitMessage();
+          this.close();
+          setTimeout(async () => {
+            try {
+              const staged = await gitService.stageFiles(selected);
+              const committed = await gitService.commit(message);
+              if (committed) {
+                const stagedInfo = staged.length === selected.length
+                  ? `已暂存 ${staged.length} 个文件`
+                  : `已暂存 ${staged.length} 个文件（${selected.length - staged.length} 个失败）`;
+                new Notice(`${stagedInfo}，提交成功`);
+              } else {
+                new Notice("没有需要提交的变更");
+              }
+              await view.update();
+            } catch (e: any) {
+              new Notice(`Commit 失败: ${e.message}`);
             }
-            this.close();
-            await view.update();
-          } catch (e: any) {
-            new Notice(`Commit 失败: ${e.message}`);
-            commitOnlyBtn.disabled = false;
-            commitOnlyBtn.textContent = "仅 Commit";
-          }
+          }, 0);
         });
 
         const pushBtn = rightBtns.createEl("button", { text: "Commit & Push", cls: "mod-cta" });
         pushBtn.addEventListener("click", async () => {
           const selected = this.checkboxes.filter((c) => c.cb.checked).map((c) => c.file.path);
           if (selected.length === 0) { new Notice("请至少选择一个文件"); return; }
-          pushBtn.disabled = true;
-          pushBtn.textContent = "推送中...";
-
-          let staged: string[] = [];
-          let committed = false;
-          try {
-            staged = await gitService.stageFiles(selected);
-            await gitService.commit(msgInput.value.trim() || view.buildCommitMessage());
-            committed = true;
-            await gitService.push(settings.gitRemoteName, settings.gitBranchName,
-              settings.gitUsername || undefined, settings.gitPassword || undefined,
-              settings.gitPushTimeout);
-            new Notice(staged.length === selected.length
-              ? `已推送 ${staged.length} 个文件`
-              : `已推送 ${staged.length} 个文件（${selected.length - staged.length} 个暂存失败）`);
-            this.close();
-            await view.update();
-          } catch (e: any) {
-            const isTimeout = e?.code === "TIMEOUT";
-            if (committed && isTimeout) {
-              new Notice(`推送超时，但已本地提交 ${staged.length} 个文件；请稍后到远程仓库确认是否已同步`, 8000);
-              this.close();
+          const message = msgInput.value.trim() || view.buildCommitMessage();
+          const timeoutMinutes = settings.gitPushTimeout;
+          this.close();
+          const loadingNotice = new Notice(`正在提交并推送...（超时：${timeoutMinutes > 0 ? timeoutMinutes + "分钟" : "无限制"}）`, 0);
+          setTimeout(async () => {
+            let staged: string[] = [];
+            let committed = false;
+            try {
+              staged = await gitService.stageFiles(selected);
+              committed = await gitService.commit(message);
+              let pushResult: string;
+              if (committed) {
+                pushResult = await gitService.push(settings.gitRemoteName, settings.gitBranchName,
+                  settings.gitUsername || undefined, settings.gitPassword || undefined,
+                  timeoutMinutes);
+              } else {
+                pushResult = "没有新的变更需要推送";
+              }
+              loadingNotice.hide();
+              const stagedInfo = staged.length === selected.length
+                ? `已暂存 ${staged.length} 个文件`
+                : `已暂存 ${staged.length} 个文件（${selected.length - staged.length} 个失败）`;
+              new Notice(`${stagedInfo}，${pushResult}`, 5000);
               await view.update();
-            } else if (committed) {
-              new Notice(`本地已提交 ${staged.length} 个文件，但推送失败: ${e.message}`, 8000);
-              this.close();
+            } catch (e: any) {
+              loadingNotice.hide();
+              const isTimeout = e?.code === "TIMEOUT";
+              if (committed && isTimeout) {
+                new Notice(`推送超时（${timeoutMinutes}分钟），但已本地提交 ${staged.length} 个文件；请到远程仓库确认`, 8000);
+              } else if (committed) {
+                new Notice(`已本地提交 ${staged.length} 个文件，但推送失败: ${e.message}`, 8000);
+              } else if (staged.length > 0) {
+                new Notice(`已暂存 ${staged.length} 个文件，但提交失败: ${e.message}`, 8000);
+              } else {
+                new Notice(`操作失败: ${e.message}`, 8000);
+              }
               await view.update();
-            } else {
-              new Notice(`Push 失败: ${e.message}`);
-              pushBtn.disabled = false;
-              pushBtn.textContent = "Commit & Push";
             }
-          }
+          }, 0);
         });
       }
 
