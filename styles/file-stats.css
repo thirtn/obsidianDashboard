@@ -79,10 +79,6 @@
   cursor: default;
 }
 
-.dashboard-badge-ok {
-  background: var(--background-modifier-success);
-  color: var(--text-success);
-}
 
 .dashboard-badge-warn {
   background: color-mix(in srgb, var(--color-orange) 15%, transparent);

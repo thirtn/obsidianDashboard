@@ -2805,8 +2805,8 @@ var FileStatsComponent = class extends BaseComponent {
     }
     const anomaly = container.createDiv("dashboard-anomaly-row");
     this.createBadge(anomaly, `\u26A0 \u5B64\u7ACB ${stats.orphanCount}`, stats.orphanCount > 0 ? "warn" : "ok", `\u5B64\u7ACB\u9875\u9762\uFF08${stats.orphanCount}\uFF09`, stats.orphanFiles);
-    this.createBadge(anomaly, `\u26A0 \u65E0\u6765\u6E90 ${stats.nosourceCount}`, stats.nosourceCount > 0 ? "warn" : "ok", `\u65E0\u6765\u6E90\u9875\u9762\uFF08${stats.nosourceCount}\uFF09`, stats.nosourceFiles);
-    this.createBadge(anomaly, `\u26A0 \u7A7A\u767D ${stats.emptyCount}`, stats.emptyCount > 0 ? "warn" : "ok", `\u7A7A\u767D\u9875\u9762\uFF08${stats.emptyCount}\uFF09`, stats.emptyFilesList);
+    this.createBadge(anomaly, `\u26A0 \u65E0\u6765\u6E90 ${stats.nosourceCount}`, stats.nosourceCount > 0 ? "warn" : "", `\u65E0\u6765\u6E90\u9875\u9762\uFF08${stats.nosourceCount}\uFF09`, stats.nosourceFiles);
+    this.createBadge(anomaly, `\u26A0 \u7A7A\u767D ${stats.emptyCount}`, stats.emptyCount > 0 ? "warn" : "", `\u7A7A\u767D\u9875\u9762\uFF08${stats.emptyCount}\uFF09`, stats.emptyFilesList);
     const health = container.createDiv("dashboard-health");
     const healthLabel = health.createDiv("dashboard-health-label");
     healthLabel.createEl("span", { text: "\u5065\u5EB7\u5EA6" });

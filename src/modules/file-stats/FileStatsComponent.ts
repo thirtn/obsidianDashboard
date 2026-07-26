@@ -88,8 +88,8 @@ export class FileStatsComponent extends BaseComponent {
 
     const anomaly = container.createDiv("dashboard-anomaly-row");
     this.createBadge(anomaly, `⚠ 孤立 ${stats.orphanCount}`, stats.orphanCount > 0 ? "warn" : "ok", `孤立页面（${stats.orphanCount}）`, stats.orphanFiles);
-    this.createBadge(anomaly, `⚠ 无来源 ${stats.nosourceCount}`, stats.nosourceCount > 0 ? "warn" : "ok", `无来源页面（${stats.nosourceCount}）`, stats.nosourceFiles);
-    this.createBadge(anomaly, `⚠ 空白 ${stats.emptyCount}`, stats.emptyCount > 0 ? "warn" : "ok", `空白页面（${stats.emptyCount}）`, stats.emptyFilesList);
+    this.createBadge(anomaly, `⚠ 无来源 ${stats.nosourceCount}`, stats.nosourceCount > 0 ? "warn" : "", `无来源页面（${stats.nosourceCount}）`, stats.nosourceFiles);
+    this.createBadge(anomaly, `⚠ 空白 ${stats.emptyCount}`, stats.emptyCount > 0 ? "warn" : "", `空白页面（${stats.emptyCount}）`, stats.emptyFilesList);
 
     const health = container.createDiv("dashboard-health");
     const healthLabel = health.createDiv("dashboard-health-label");
@@ -118,7 +118,7 @@ export class FileStatsComponent extends BaseComponent {
     }
   }
 
-  private createBadge(parent: HTMLElement, text: string, level: "ok" | "warn", tooltip?: string, files?: string[]) {
+  private createBadge(parent: HTMLElement, text: string, level: string, tooltip?: string, files?: string[]) {
     const badge = parent.createEl("span", { text, cls: `dashboard-badge dashboard-badge-${level}` });
     if (!files || files.length === 0) return;
     attachFileListPopover(badge, files, tooltip ?? text, (filePath) => {
