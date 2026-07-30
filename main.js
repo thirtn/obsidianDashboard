@@ -122,12 +122,12 @@ var DEFAULT_SETTINGS = {
     "heatmap": "both",
     "llm-command": "both",
     "operation-log": "both",
-    "git-sync": "desktop",
+    "git-sync": "both",
     "remotely-save": "both",
     "task-quickadd": "both",
-    "plugin-manage": "desktop",
+    "plugin-manage": "both",
     "voice-transcription": "both",
-    "large-files": "desktop"
+    "large-files": "both"
   },
   openOnStartup: false,
   heatmapDataPath: ".dashboard/heatmap.json",
@@ -946,9 +946,13 @@ var GitService = class {
     }
   }
   async initRepo() {
+    if (this.isMobile)
+      throw new Error("Git \u64CD\u4F5C\u4EC5\u652F\u6301\u684C\u9762\u7AEF");
     this.execArgs(["init"]);
   }
   async ensureRemote(url, name2) {
+    if (this.isMobile)
+      return;
     try {
       const remotesRaw = this.execArgs(["remote", "-v"]).trim();
       const lines = remotesRaw.split("\n");
@@ -3791,36 +3795,35 @@ var GitSyncComponent = class extends BaseComponent {
       });
       return;
     }
-    if (this.gitService.isMobile) {
-      body.createDiv({
-        text: "Git \u540C\u6B65\u4EC5\u5728\u684C\u9762\u7AEF Obsidian \u53EF\u7528\u3002\u8BF7\u4F7F\u7528\u684C\u9762\u7AEF\u8FDB\u884C Push/Pull \u64CD\u4F5C\u3002",
-        cls: "dashboard-git-mobile-hint"
-      });
-      return;
-    }
     const isRepo = await this.gitService.isGitRepo();
     if (!isRepo) {
-      body.createDiv({
-        text: "\u5F53\u524D vault \u5C1A\u672A\u521D\u59CB\u5316 Git \u4ED3\u5E93",
-        cls: "dashboard-git-notice"
-      });
-      const initBtn = body.createEl("button", { text: "\u521D\u59CB\u5316 Git \u4ED3\u5E93", cls: "mod-cta dashboard-git-init-btn" });
-      initBtn.addEventListener("click", async () => {
-        initBtn.disabled = true;
-        initBtn.textContent = "\u521D\u59CB\u5316\u4E2D...";
-        try {
-          await this.gitService.initRepo();
-          if (this.settings.gitRemoteURL) {
-            await this.gitService.ensureRemote(this.settings.gitRemoteURL, this.settings.gitRemoteName);
+      if (this.gitService.isMobile) {
+        const statusRow2 = body.createDiv("dashboard-git-status");
+        statusRow2.createDiv("dashboard-git-status-dot clean");
+        statusRow2.createDiv("dashboard-git-status-text").createEl("span", { text: "Git \u540C\u6B65" });
+      } else {
+        body.createDiv({
+          text: "\u5F53\u524D vault \u5C1A\u672A\u521D\u59CB\u5316 Git \u4ED3\u5E93",
+          cls: "dashboard-git-notice"
+        });
+        const initBtn = body.createEl("button", { text: "\u521D\u59CB\u5316 Git \u4ED3\u5E93", cls: "mod-cta dashboard-git-init-btn" });
+        initBtn.addEventListener("click", async () => {
+          initBtn.disabled = true;
+          initBtn.textContent = "\u521D\u59CB\u5316\u4E2D...";
+          try {
+            await this.gitService.initRepo();
+            if (this.settings.gitRemoteURL) {
+              await this.gitService.ensureRemote(this.settings.gitRemoteURL, this.settings.gitRemoteName);
+            }
+            new import_obsidian17.Notice("Git \u4ED3\u5E93\u521D\u59CB\u5316\u6210\u529F");
+            await this.update();
+          } catch (e) {
+            new import_obsidian17.Notice(`\u521D\u59CB\u5316\u5931\u8D25: ${e.message}`);
+            initBtn.disabled = false;
+            initBtn.textContent = "\u521D\u59CB\u5316 Git \u4ED3\u5E93";
           }
-          new import_obsidian17.Notice("Git \u4ED3\u5E93\u521D\u59CB\u5316\u6210\u529F");
-          await this.update();
-        } catch (e) {
-          new import_obsidian17.Notice(`\u521D\u59CB\u5316\u5931\u8D25: ${e.message}`);
-          initBtn.disabled = false;
-          initBtn.textContent = "\u521D\u59CB\u5316 Git \u4ED3\u5E93";
-        }
-      });
+        });
+      }
       return;
     }
     let remoteOk = true;
@@ -3866,61 +3869,63 @@ var GitSyncComponent = class extends BaseComponent {
     if (!remoteOk) {
       statusRow.createDiv({ text: "\u672A\u80FD\u914D\u7F6E\u8FDC\u7A0B\u4ED3\u5E93\uFF0C\u8BF7\u68C0\u67E5\u4ED3\u5E93\u5730\u5740", cls: "dashboard-git-warn" });
     }
-    const actions = body.createDiv("dashboard-git-actions");
-    const pullBtn = actions.createEl("button", { text: "\u2B07 Pull", cls: "dashboard-git-btn", title: "\u4ECE\u8FDC\u7A0B\u62C9\u53D6\u6700\u65B0\u4EE3\u7801" });
-    pullBtn.addEventListener("click", async () => {
-      pullBtn.disabled = true;
-      pullBtn.textContent = "\u62C9\u53D6\u4E2D...";
-      try {
-        const result = await this.gitService.pull(
-          this.settings.gitRemoteName,
-          this.settings.gitBranchName,
-          this.settings.gitUsername || void 0,
-          this.settings.gitPassword || void 0,
-          this.settings.gitPushTimeout
-        );
-        new import_obsidian17.Notice(result);
-        await this.update();
-      } catch (e) {
-        new import_obsidian17.Notice(`Pull \u5931\u8D25: ${e.message}`);
-      } finally {
-        pullBtn.disabled = false;
-        pullBtn.textContent = "\u2B07 Pull";
-      }
-    });
-    const pushBtn = actions.createEl("button", { text: "\u2B06 Push", cls: "mod-cta dashboard-git-btn", title: "\u63D0\u4EA4\u5E76\u63A8\u9001\u6240\u6709\u53D8\u66F4" });
-    pushBtn.addEventListener("click", async () => {
-      const files = await this.gitService.getStatusFiles();
-      if (files.length === 0) {
-        new import_obsidian17.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u6587\u4EF6");
-        return;
-      }
-      this.showPushConfirmModal(files);
-    });
-    const rollbackBtn = actions.createEl("button", { text: "\u21A9 Rollback", cls: "dashboard-git-btn", title: "\u56DE\u6EDA\u672A\u6682\u5B58\u7684\u53D8\u66F4" });
-    rollbackBtn.addEventListener("click", async () => {
-      const files = await this.gitService.getStatusFiles();
-      if (files.length === 0) {
-        new import_obsidian17.Notice("\u6CA1\u6709\u53EF\u4EE5\u56DE\u6EDA\u7684\u53D8\u66F4");
-        return;
-      }
-      this.showRollbackConfirmModal(files);
-    });
-    const autoRow = body.createDiv("dashboard-git-auto-row");
-    const autoLabel = autoRow.createEl("label", { cls: "dashboard-git-auto-label" });
-    autoLabel.createEl("span", { text: "\u81EA\u52A8 Push" });
-    const autoToggle = autoLabel.createEl("input");
-    autoToggle.type = "checkbox";
-    autoToggle.checked = this.settings.gitAutoPushEnabled;
-    autoToggle.addEventListener("change", async () => {
-      this.settings.gitAutoPushEnabled = autoToggle.checked;
-      await this.onSettingsChange(this.settings);
-      this.setupAutoPush();
-    });
-    autoRow.createEl("span", {
-      text: this.settings.gitAutoPushInterval === 0 ? "\u6BCF\u6B21\u53D8\u66F4\u540E\u81EA\u52A8\u63A8\u9001" : `\u6BCF ${this.settings.gitAutoPushInterval} \u5206\u949F\u81EA\u52A8\u63A8\u9001`,
-      cls: "dashboard-git-auto-hint"
-    });
+    if (!this.gitService.isMobile) {
+      const actions = body.createDiv("dashboard-git-actions");
+      const pullBtn = actions.createEl("button", { text: "\u2B07 Pull", cls: "dashboard-git-btn", title: "\u4ECE\u8FDC\u7A0B\u62C9\u53D6\u6700\u65B0\u4EE3\u7801" });
+      pullBtn.addEventListener("click", async () => {
+        pullBtn.disabled = true;
+        pullBtn.textContent = "\u62C9\u53D6\u4E2D...";
+        try {
+          const result = await this.gitService.pull(
+            this.settings.gitRemoteName,
+            this.settings.gitBranchName,
+            this.settings.gitUsername || void 0,
+            this.settings.gitPassword || void 0,
+            this.settings.gitPushTimeout
+          );
+          new import_obsidian17.Notice(result);
+          await this.update();
+        } catch (e) {
+          new import_obsidian17.Notice(`Pull \u5931\u8D25: ${e.message}`);
+        } finally {
+          pullBtn.disabled = false;
+          pullBtn.textContent = "\u2B07 Pull";
+        }
+      });
+      const pushBtn = actions.createEl("button", { text: "\u2B06 Push", cls: "mod-cta dashboard-git-btn", title: "\u63D0\u4EA4\u5E76\u63A8\u9001\u6240\u6709\u53D8\u66F4" });
+      pushBtn.addEventListener("click", async () => {
+        const files = await this.gitService.getStatusFiles();
+        if (files.length === 0) {
+          new import_obsidian17.Notice("\u6CA1\u6709\u9700\u8981\u63D0\u4EA4\u7684\u6587\u4EF6");
+          return;
+        }
+        this.showPushConfirmModal(files);
+      });
+      const rollbackBtn = actions.createEl("button", { text: "\u21A9 Rollback", cls: "dashboard-git-btn", title: "\u56DE\u6EDA\u672A\u6682\u5B58\u7684\u53D8\u66F4" });
+      rollbackBtn.addEventListener("click", async () => {
+        const files = await this.gitService.getStatusFiles();
+        if (files.length === 0) {
+          new import_obsidian17.Notice("\u6CA1\u6709\u53EF\u4EE5\u56DE\u6EDA\u7684\u53D8\u66F4");
+          return;
+        }
+        this.showRollbackConfirmModal(files);
+      });
+      const autoRow = body.createDiv("dashboard-git-auto-row");
+      const autoLabel = autoRow.createEl("label", { cls: "dashboard-git-auto-label" });
+      autoLabel.createEl("span", { text: "\u81EA\u52A8 Push" });
+      const autoToggle = autoLabel.createEl("input");
+      autoToggle.type = "checkbox";
+      autoToggle.checked = this.settings.gitAutoPushEnabled;
+      autoToggle.addEventListener("change", async () => {
+        this.settings.gitAutoPushEnabled = autoToggle.checked;
+        await this.onSettingsChange(this.settings);
+        this.setupAutoPush();
+      });
+      autoRow.createEl("span", {
+        text: this.settings.gitAutoPushInterval === 0 ? "\u6BCF\u6B21\u53D8\u66F4\u540E\u81EA\u52A8\u63A8\u9001" : `\u6BCF ${this.settings.gitAutoPushInterval} \u5206\u949F\u81EA\u52A8\u63A8\u9001`,
+        cls: "dashboard-git-auto-hint"
+      });
+    }
     const commits = await this.gitService.getRecentCommits(5);
     if (commits.length > 0) {
       const commitSection = body.createDiv("dashboard-git-commits");

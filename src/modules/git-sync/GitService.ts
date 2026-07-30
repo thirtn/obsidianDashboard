@@ -95,10 +95,12 @@ export class GitService {
   }
 
   async initRepo(): Promise<void> {
+    if (this.isMobile) throw new Error("Git 操作仅支持桌面端");
     this.execArgs(["init"]);
   }
 
   async ensureRemote(url: string, name: string): Promise<void> {
+    if (this.isMobile) return;
     // Check if any existing remote already points to this URL — reuse it.
     try {
       const remotesRaw = (this.execArgs(["remote", "-v"]) as string).trim();

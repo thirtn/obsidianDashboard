@@ -140,38 +140,37 @@ export class GitSyncComponent extends BaseComponent {
       return;
     }
 
-    if (this.gitService.isMobile) {
-      body.createDiv({
-        text: "Git 同步仅在桌面端 Obsidian 可用。请使用桌面端进行 Push/Pull 操作。",
-        cls: "dashboard-git-mobile-hint",
-      });
-      return;
-    }
-
     const isRepo = await this.gitService.isGitRepo();
 
     if (!isRepo) {
-      body.createDiv({
-        text: "当前 vault 尚未初始化 Git 仓库",
-        cls: "dashboard-git-notice",
-      });
-      const initBtn = body.createEl("button", { text: "初始化 Git 仓库", cls: "mod-cta dashboard-git-init-btn" });
-      initBtn.addEventListener("click", async () => {
-        initBtn.disabled = true;
-        initBtn.textContent = "初始化中...";
-        try {
-          await this.gitService.initRepo();
-          if (this.settings.gitRemoteURL) {
-            await this.gitService.ensureRemote(this.settings.gitRemoteURL, this.settings.gitRemoteName);
+      if (this.gitService.isMobile) {
+        // 移动端不执行 git 命令，显示空状态即可
+        const statusRow = body.createDiv("dashboard-git-status");
+        statusRow.createDiv("dashboard-git-status-dot clean");
+        statusRow.createDiv("dashboard-git-status-text").createEl("span", { text: "Git 同步" });
+      } else {
+        body.createDiv({
+          text: "当前 vault 尚未初始化 Git 仓库",
+          cls: "dashboard-git-notice",
+        });
+        const initBtn = body.createEl("button", { text: "初始化 Git 仓库", cls: "mod-cta dashboard-git-init-btn" });
+        initBtn.addEventListener("click", async () => {
+          initBtn.disabled = true;
+          initBtn.textContent = "初始化中...";
+          try {
+            await this.gitService.initRepo();
+            if (this.settings.gitRemoteURL) {
+              await this.gitService.ensureRemote(this.settings.gitRemoteURL, this.settings.gitRemoteName);
+            }
+            new Notice("Git 仓库初始化成功");
+            await this.update();
+          } catch (e: any) {
+            new Notice(`初始化失败: ${e.message}`);
+            initBtn.disabled = false;
+            initBtn.textContent = "初始化 Git 仓库";
           }
-          new Notice("Git 仓库初始化成功");
-          await this.update();
-        } catch (e: any) {
-          new Notice(`初始化失败: ${e.message}`);
-          initBtn.disabled = false;
-          initBtn.textContent = "初始化 Git 仓库";
-        }
-      });
+        });
+      }
       return;
     }
 
@@ -220,7 +219,8 @@ export class GitSyncComponent extends BaseComponent {
       statusRow.createDiv({ text: "未能配置远程仓库，请检查仓库地址", cls: "dashboard-git-warn" });
     }
 
-    // Action buttons
+    // Action buttons (desktop only)
+    if (!this.gitService.isMobile) {
     const actions = body.createDiv("dashboard-git-actions");
 
     const pullBtn = actions.createEl("button", { text: "⬇ Pull", cls: "dashboard-git-btn", title: "从远程拉取最新代码" });
@@ -281,6 +281,8 @@ export class GitSyncComponent extends BaseComponent {
         : `每 ${this.settings.gitAutoPushInterval} 分钟自动推送`,
       cls: "dashboard-git-auto-hint",
     });
+
+    } // end mobile check
 
     // Recent commits
     const commits = await this.gitService.getRecentCommits(5);
