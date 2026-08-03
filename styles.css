@@ -1680,7 +1680,12 @@
     gap: 6px;
   }
 
-  /* Plugin table - let it scroll horizontally */
+  /* Plugin table - hide desc column, let rest scroll on very narrow */
+  .dashboard-plugin-table th:nth-child(2),
+  .dashboard-plugin-table td:nth-child(2) {
+    display: none;
+  }
+
   .dashboard-plugin-table-wrap {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -1688,6 +1693,7 @@
 
   .dashboard-plugin-table {
     font-size: 10px;
+    min-width: 320px;
   }
 
   .dashboard-plugin-desc {
@@ -2024,6 +2030,13 @@ body.is-phone .dashboard-scroll {
   border-collapse: collapse;
   font-size: 11px;
   margin-bottom: 8px;
+}
+
+.dashboard-plugin-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -4px;
+  padding: 0 4px;
 }
 
 .dashboard-plugin-table th {

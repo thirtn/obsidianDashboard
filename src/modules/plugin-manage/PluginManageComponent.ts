@@ -30,7 +30,8 @@ export class PluginManageComponent extends BaseComponent {
     if (plugins.length === 0) {
       body.createDiv({ text: "未检测到已安装插件", cls: "dashboard-empty" });
     } else {
-      const table = body.createEl("table", { cls: "dashboard-plugin-table" });
+      const tableWrap = body.createDiv("dashboard-plugin-table-wrap");
+      const table = tableWrap.createEl("table", { cls: "dashboard-plugin-table" });
       const hr = table.createEl("thead").createEl("tr");
       for (const h of ["插件名称", "说明", "版本", "启用", "设置"]) hr.createEl("th", { text: h });
       const tbody = table.createEl("tbody");

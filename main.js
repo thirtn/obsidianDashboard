@@ -4781,7 +4781,8 @@ var PluginManageComponent = class extends BaseComponent {
     if (plugins.length === 0) {
       body.createDiv({ text: "\u672A\u68C0\u6D4B\u5230\u5DF2\u5B89\u88C5\u63D2\u4EF6", cls: "dashboard-empty" });
     } else {
-      const table = body.createEl("table", { cls: "dashboard-plugin-table" });
+      const tableWrap = body.createDiv("dashboard-plugin-table-wrap");
+      const table = tableWrap.createEl("table", { cls: "dashboard-plugin-table" });
       const hr = table.createEl("thead").createEl("tr");
       for (const h of ["\u63D2\u4EF6\u540D\u79F0", "\u8BF4\u660E", "\u7248\u672C", "\u542F\u7528", "\u8BBE\u7F6E"])
         hr.createEl("th", { text: h });
